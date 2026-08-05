@@ -6,7 +6,7 @@ namespace SupplyGuard.Infrastructure.Persistence.DesignTime;
 public sealed class SupplyGuardDbContextFactory : IDesignTimeDbContextFactory<SupplyGuardDbContext>
 {
     private const string DefaultConnectionString =
-        "Host=localhost;Port=5432;Database=supplyguard;Username=postgres;Password=postgres";
+        "Host=localhost;Port=5432;Database=supplyguard_db;Username=supplyguard;Password=supplyguard_dev_password;";
 
     public SupplyGuardDbContext CreateDbContext(string[] args)
     {
