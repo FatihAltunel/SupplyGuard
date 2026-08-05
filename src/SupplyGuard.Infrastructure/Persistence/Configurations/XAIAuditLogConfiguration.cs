@@ -36,5 +36,6 @@ public sealed class XAIAuditLogConfiguration : IEntityTypeConfiguration<XAIAudit
             .WithMany()
             .HasForeignKey(log => log.RiskAssessmentId)
             .OnDelete(DeleteBehavior.Restrict);
+        builder.HasQueryFilter(log => !log.Supplier.IsDeleted);
     }
 }

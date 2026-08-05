@@ -34,10 +34,10 @@ public sealed class SupplierConfiguration : IEntityTypeConfiguration<Supplier>
             .IsUnique()
             .HasDatabaseName("UX_Suppliers_CountryCode_TaxNumber");
 
-        builder.Navigation(supplier => supplier.RiskAssessments).UsePropertyAccessMode(PropertyAccessMode.Field);
-        builder.Navigation(supplier => supplier.RiskIndicators).UsePropertyAccessMode(PropertyAccessMode.Field);
-        builder.Navigation(supplier => supplier.EarlyWarnings).UsePropertyAccessMode(PropertyAccessMode.Field);
-        builder.Navigation(supplier => supplier.XAIAuditLogs).UsePropertyAccessMode(PropertyAccessMode.Field);
+        builder.Navigation(supplier => supplier.RiskAssessments).HasField("_riskAssessments").UsePropertyAccessMode(PropertyAccessMode.Field);
+        builder.Navigation(supplier => supplier.RiskIndicators).HasField("_riskIndicators").UsePropertyAccessMode(PropertyAccessMode.Field);
+        builder.Navigation(supplier => supplier.EarlyWarnings).HasField("_earlyWarnings").UsePropertyAccessMode(PropertyAccessMode.Field);
+        builder.Navigation(supplier => supplier.XAIAuditLogs).HasField("_xaiAuditLogs").UsePropertyAccessMode(PropertyAccessMode.Field);
         builder.HasQueryFilter(supplier => !supplier.IsDeleted);
     }
 

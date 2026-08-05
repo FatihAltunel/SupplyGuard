@@ -25,5 +25,6 @@ public sealed class RiskScoreConfiguration : IEntityTypeConfiguration<RiskScore>
             .WithMany(assessment => assessment.RiskScores)
             .HasForeignKey(score => score.RiskAssessmentId)
             .OnDelete(DeleteBehavior.Restrict);
+        builder.HasQueryFilter(score => !score.RiskAssessment.IsDeleted);
     }
 }

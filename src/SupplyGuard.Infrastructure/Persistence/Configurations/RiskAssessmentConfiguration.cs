@@ -31,7 +31,7 @@ public sealed class RiskAssessmentConfiguration : IEntityTypeConfiguration<RiskA
             .HasForeignKey(assessment => assessment.SupplierId)
             .OnDelete(DeleteBehavior.Restrict);
 
-        builder.Navigation(assessment => assessment.RiskScores).UsePropertyAccessMode(PropertyAccessMode.Field);
+        builder.Navigation(assessment => assessment.RiskScores).HasField("_riskScores").UsePropertyAccessMode(PropertyAccessMode.Field);
         builder.HasQueryFilter(assessment => !assessment.IsDeleted);
     }
 }
