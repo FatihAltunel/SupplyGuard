@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: supplyguard-postgres
+    environment:
+      POSTGRES_USER: supplyguard
+      POSTGRES_PASSWORD: supplyguard_dev_password
+      POSTGRES_DB: supplyguard_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - supplyguard_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U supplyguard -d supplyguard_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  supplyguard_postgres_data:
