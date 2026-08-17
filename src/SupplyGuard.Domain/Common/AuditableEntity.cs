@@ -27,6 +27,21 @@ public abstract class AuditableEntity : BaseEntity, ISoftDeletable
         LastModifiedAtUtc = DateTimeOffset.UtcNow;
     }
 
+    internal void UpdateAuditInfo(Guid? userId, DateTimeOffset utcNow, bool isNew)
+    {
+        var timestamp = utcNow.ToUniversalTime();
+
+        if (isNew)
+        {
+            CreatedByUserId = userId;
+            CreatedAtUtc = timestamp;
+            return;
+        }
+
+        LastModifiedByUserId = userId;
+        LastModifiedAtUtc = timestamp;
+    }
+
     public void MarkAsDeleted(Guid? deletedByUserId = null)
     {
         if (IsDeleted)
