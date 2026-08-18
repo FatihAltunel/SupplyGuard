@@ -7,6 +7,7 @@ using SupplyGuard.Infrastructure.Identity.Seeding;
 using SupplyGuard.Infrastructure.Identity.Services;
 using SupplyGuard.Infrastructure.Persistence;
 using SupplyGuard.Infrastructure.Persistence.Interceptors;
+using SupplyGuard.Infrastructure.Persistence.Repositories;
 
 namespace SupplyGuard.Infrastructure;
 
@@ -26,6 +27,7 @@ public static class DependencyInjection
 
         services.AddScoped<IIdentityService, IdentityService>();
         services.AddScoped<ITokenService, JwtTokenService>();
+        services.AddScoped<ISupplierRepository, SupplierRepository>();
         services.AddScoped<IdentitySeeder>();
 
         return services;
