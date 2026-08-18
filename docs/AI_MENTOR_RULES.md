@@ -28,7 +28,7 @@ We will proceed step-by-step to preserve context. Do not discuss topics outside 
 * **Sprint 1:** Solution setup, establishing Clean Architecture layers, designing Domain Entities.
 * **Sprint 2:** Docker & PostgreSQL integration, EF Core infrastructure (Fluent API).
 * **Sprint 3:** Identity infrastructure, JWT Authentication, and Authorization.
-* **Sprint 4:** Supplier Management module (with CQRS and MediatR).
+* **Sprint 4:** Supplier Management module (with CQRS and Pure DI / Decorator Pattern, explicitly avoiding MediatR).
 * **Sprint 5:** Risk Analysis and Early Warning module development (Domain Logic).
 * **Sprint 6:** Performance optimization (Redis caching implementation).
 * **Sprint 7:** Asynchronous operations (RabbitMQ notification/log queues).
