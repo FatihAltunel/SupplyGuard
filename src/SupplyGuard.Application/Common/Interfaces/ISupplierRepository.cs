@@ -11,5 +11,14 @@ public interface ISupplierRepository
 
     Task AddAsync(Supplier supplier, CancellationToken cancellationToken = default);
 
+    Task<Supplier?> GetByIdAsync(Guid supplierId, CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<Supplier>> GetPageAsync(
+        int skip,
+        int take,
+        CancellationToken cancellationToken = default);
+
+    Task<int> GetCountAsync(CancellationToken cancellationToken = default);
+
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }
