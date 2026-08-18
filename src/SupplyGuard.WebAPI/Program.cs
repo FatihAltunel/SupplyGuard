@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.IdentityModel.Tokens;
 using SupplyGuard.Application.Common.Interfaces;
+using SupplyGuard.Application;
 using SupplyGuard.Infrastructure;
 using SupplyGuard.Infrastructure.Identity.Entities;
 using SupplyGuard.Infrastructure.Identity.Jwt;
@@ -18,6 +19,7 @@ builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptions.SectionName));
 builder.Services.Configure<InitialAdministratorOptions>(
     builder.Configuration.GetSection(InitialAdministratorOptions.SectionName));
+builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
 
 builder.Services
