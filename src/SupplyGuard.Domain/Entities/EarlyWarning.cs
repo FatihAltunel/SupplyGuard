@@ -44,8 +44,19 @@ public class EarlyWarning : AuditableEntity
             throw new InvalidOperationException("A closed warning cannot be acknowledged.");
         }
 
+        if (Status == WarningStatus.Acknowledged)
+        {
+            throw new InvalidOperationException("The warning has already been acknowledged.");
+        }
+
+        var acknowledgementTime = acknowledgedAtUtc.ToUniversalTime();
+        if (acknowledgementTime < DetectedAtUtc)
+        {
+            throw new ArgumentOutOfRangeException(nameof(acknowledgedAtUtc), "Acknowledgement cannot predate warning detection.");
+        }
+
         AcknowledgedByUserId = RequireId(acknowledgedByUserId, nameof(acknowledgedByUserId));
-        AcknowledgedAtUtc = acknowledgedAtUtc.ToUniversalTime();
+        AcknowledgedAtUtc = acknowledgementTime;
         Status = WarningStatus.Acknowledged;
         MarkAsModified(acknowledgedByUserId);
     }
@@ -57,9 +68,20 @@ public class EarlyWarning : AuditableEntity
             throw new InvalidOperationException("The warning is already closed.");
         }
 
+        if (Status != WarningStatus.Acknowledged)
+        {
+            throw new InvalidOperationException("The warning must be acknowledged before it can be resolved.");
+        }
+
+        var resolutionTime = resolvedAtUtc.ToUniversalTime();
+        if (resolutionTime < AcknowledgedAtUtc)
+        {
+            throw new ArgumentOutOfRangeException(nameof(resolvedAtUtc), "Resolution cannot predate acknowledgement.");
+        }
+
         ResolvedByUserId = RequireId(resolvedByUserId, nameof(resolvedByUserId));
         ResolutionNote = RequireText(resolutionNote, nameof(resolutionNote), 2_000);
-        ResolvedAtUtc = resolvedAtUtc.ToUniversalTime();
+        ResolvedAtUtc = resolutionTime;
         Status = WarningStatus.Resolved;
         MarkAsModified(resolvedByUserId);
     }

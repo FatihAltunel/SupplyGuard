@@ -1,4 +1,5 @@
 using SupplyGuard.Domain.Common;
+using SupplyGuard.Domain.Enums;
 
 namespace SupplyGuard.Domain.Entities;
 
@@ -9,6 +10,7 @@ public class XAIAuditLog : BaseEntity
     public string ModelName { get; private set; } = null!;
     public string ModelVersion { get; private set; } = null!;
     public string CorrelationId { get; private set; } = null!;
+    public ExplanationStatus ExplanationStatus { get; private set; }
     public string RequestPayload { get; private set; } = null!;
     public string? ResponsePayload { get; private set; }
     public decimal ConfidenceScore { get; private set; }
@@ -38,7 +40,8 @@ public class XAIAuditLog : BaseEntity
         DateTimeOffset executedAtUtc,
         Guid? riskAssessmentId = null,
         string? failureCode = null,
-        string? failureMessage = null)
+        string? failureMessage = null,
+        ExplanationStatus? explanationStatus = null)
         : base(Guid.NewGuid())
     {
         SupplierId = RequireId(supplierId, nameof(supplierId));
@@ -46,6 +49,7 @@ public class XAIAuditLog : BaseEntity
         ModelName = RequireText(modelName, nameof(modelName), 200);
         ModelVersion = RequireText(modelVersion, nameof(modelVersion), 100);
         CorrelationId = RequireText(correlationId, nameof(correlationId), 128);
+        ExplanationStatus = explanationStatus ?? (isSuccessful ? ExplanationStatus.Completed : ExplanationStatus.Failed);
         RequestPayload = RequireText(requestPayload, nameof(requestPayload), 100_000);
         ResponsePayload = NormalizeOptionalText(responsePayload, 100_000);
         ConfidenceScore = RequireConfidenceScore(confidenceScore);
@@ -55,14 +59,24 @@ public class XAIAuditLog : BaseEntity
         FailureMessage = NormalizeOptionalText(failureMessage, 2_000);
         ExecutedAtUtc = executedAtUtc.ToUniversalTime();
 
-        if (isSuccessful && ResponsePayload is null)
+        if (ExplanationStatus == ExplanationStatus.Completed && (!isSuccessful || ResponsePayload is null))
         {
-            throw new ArgumentException("A successful XAI request requires a response payload.", nameof(responsePayload));
+            throw new ArgumentException("A completed explanation requires a successful response payload.", nameof(responsePayload));
         }
 
-        if (!isSuccessful && FailureCode is null)
+        if (ExplanationStatus == ExplanationStatus.Failed && (isSuccessful || FailureCode is null))
         {
-            throw new ArgumentException("A failed XAI request requires a failure code.", nameof(failureCode));
+            throw new ArgumentException("A failed explanation requires a failure code and cannot be successful.", nameof(failureCode));
+        }
+
+        if (ExplanationStatus == ExplanationStatus.Pending && (isSuccessful || ResponsePayload is not null || FailureCode is not null))
+        {
+            throw new ArgumentException("A pending explanation cannot contain a response or failure outcome.", nameof(explanationStatus));
+        }
+
+        if (ExplanationStatus == ExplanationStatus.RuleBased && ResponsePayload is null)
+        {
+            throw new ArgumentException("A rule-based explanation requires an explanation payload.", nameof(responsePayload));
         }
     }
 

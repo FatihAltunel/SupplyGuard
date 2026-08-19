@@ -73,7 +73,7 @@ public class RiskAssessment : AuditableEntity
             < 75 => RiskLevel.High,
             _ => RiskLevel.Critical
         };
-        AssessedAtUtc = DateTimeOffset.UtcNow;
+        AssessedAtUtc = _riskScores.Max(score => score.CalculatedAtUtc);
     }
 
     private static Guid RequireId(Guid value, string parameterName) => value == Guid.Empty ? throw new ArgumentException("Identifier cannot be empty.", parameterName) : value;

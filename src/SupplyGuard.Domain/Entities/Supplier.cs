@@ -2,6 +2,8 @@ namespace SupplyGuard.Domain.Entities;
 
 using SupplyGuard.Domain.Common;
 using SupplyGuard.Domain.Enums;
+using SupplyGuard.Domain.Events;
+using SupplyGuard.Domain.Services;
 
 public class Supplier : AuditableEntity
 {
@@ -114,6 +116,91 @@ public class Supplier : AuditableEntity
         MarkAsModified(modifiedByUserId);
     }
 
+    public void ApplyRiskAssessment(
+        RiskAssessmentResult result,
+        string correlationId,
+        Guid? modifiedByUserId = null)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        var normalizedCorrelationId = RequireText(correlationId, nameof(correlationId), 128);
+        var assessment = result.Assessment;
+
+        EnsureBelongsToSupplier(assessment.SupplierId);
+        if (_riskAssessments.Any(existing => existing.Id == assessment.Id))
+        {
+            throw new InvalidOperationException("The risk assessment has already been applied.");
+        }
+
+        if (result.EarlyWarning is not null)
+        {
+            EnsureBelongsToSupplier(result.EarlyWarning.SupplierId);
+            if (result.EarlyWarning.RiskAssessmentId != assessment.Id)
+            {
+                throw new InvalidOperationException("The early warning must reference the applied risk assessment.");
+            }
+        }
+
+        _riskAssessments.Add(assessment);
+        LastRiskAssessmentAtUtc = assessment.AssessedAtUtc;
+
+        if (result.EarlyWarning is not null)
+        {
+            _earlyWarnings.Add(result.EarlyWarning);
+        }
+
+        MarkAsModified(modifiedByUserId);
+        RaiseDomainEvent(new SupplierRiskAssessedEvent(
+            Id,
+            assessment.Id,
+            assessment.OverallRiskScore,
+            assessment.OverallRiskLevel,
+            normalizedCorrelationId,
+            assessment.AssessedAtUtc));
+
+        if (result.EarlyWarning is not null)
+        {
+            RaiseDomainEvent(new EarlyWarningTriggeredEvent(
+                Id,
+                result.EarlyWarning.Id,
+                assessment.Id,
+                result.EarlyWarning.Severity,
+                normalizedCorrelationId,
+                result.EarlyWarning.DetectedAtUtc));
+        }
+    }
+
+    public void AcknowledgeEarlyWarning(
+        Guid earlyWarningId,
+        Guid acknowledgedByUserId,
+        DateTimeOffset acknowledgedAtUtc)
+    {
+        var warning = GetEarlyWarning(earlyWarningId);
+        warning.Acknowledge(acknowledgedByUserId, acknowledgedAtUtc);
+        MarkAsModified(acknowledgedByUserId);
+        RaiseDomainEvent(new EarlyWarningAcknowledgedEvent(
+            Id,
+            warning.Id,
+            acknowledgedByUserId,
+            warning.AcknowledgedAtUtc!.Value));
+    }
+
+    public void ResolveEarlyWarning(
+        Guid earlyWarningId,
+        Guid resolvedByUserId,
+        string resolutionNote,
+        DateTimeOffset resolvedAtUtc)
+    {
+        var warning = GetEarlyWarning(earlyWarningId);
+        warning.Resolve(resolvedByUserId, resolutionNote, resolvedAtUtc);
+        MarkAsModified(resolvedByUserId);
+        RaiseDomainEvent(new EarlyWarningResolvedEvent(
+            Id,
+            warning.Id,
+            resolvedByUserId,
+            warning.ResolutionNote!,
+            warning.ResolvedAtUtc!.Value));
+    }
+
     public void AddRiskIndicator(RiskIndicator riskIndicator, Guid? modifiedByUserId = null)
     {
         ArgumentNullException.ThrowIfNull(riskIndicator);
@@ -147,6 +234,17 @@ public class Supplier : AuditableEntity
         {
             throw new InvalidOperationException("The related entity belongs to a different supplier.");
         }
+    }
+
+    private EarlyWarning GetEarlyWarning(Guid earlyWarningId)
+    {
+        if (earlyWarningId == Guid.Empty)
+        {
+            throw new ArgumentException("Identifier cannot be empty.", nameof(earlyWarningId));
+        }
+
+        return _earlyWarnings.SingleOrDefault(warning => warning.Id == earlyWarningId)
+            ?? throw new InvalidOperationException("The early warning does not belong to this supplier.");
     }
 
     private static string NormalizeCountryCode(string countryCode)
