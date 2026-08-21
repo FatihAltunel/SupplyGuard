@@ -21,6 +21,11 @@ builder.Services.Configure<InitialAdministratorOptions>(
     builder.Configuration.GetSection(InitialAdministratorOptions.SectionName));
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddStackExchangeRedisCache(options =>
+{
+    options.Configuration = builder.Configuration.GetConnectionString("Redis")
+        ?? throw new InvalidOperationException("Redis connection configuration was not found.");
+});
 
 builder.Services
     .AddIdentityCore<AppUser>(options =>

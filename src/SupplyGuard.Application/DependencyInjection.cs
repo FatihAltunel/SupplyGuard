@@ -1,5 +1,8 @@
 using FluentValidation;
+using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using SupplyGuard.Application.Common.Caching;
 using SupplyGuard.Application.Common.CQRS;
 using SupplyGuard.Application.Common.CQRS.Validation;
 using SupplyGuard.Application.Common.Events;
@@ -29,16 +32,24 @@ public static class DependencyInjection
         services.AddValidatedCommandHandler<CreateSupplierCommand, Guid, CreateSupplierCommandHandler>();
 
         services.AddScoped<IValidator<UpdateSupplierCommand>, UpdateSupplierCommandValidator>();
-        services.AddValidatedCommandHandler<UpdateSupplierCommand, Guid, UpdateSupplierCommandHandler>();
+        services.AddCacheInvalidatingValidatedCommandHandler<UpdateSupplierCommand, Guid, UpdateSupplierCommandHandler>(
+            command => [CacheKeys.SupplierDetails(command.SupplierId)]);
 
         services.AddScoped<IValidator<ChangeSupplierStatusCommand>, ChangeSupplierStatusCommandValidator>();
-        services.AddValidatedCommandHandler<ChangeSupplierStatusCommand, Guid, ChangeSupplierStatusCommandHandler>();
+        services.AddCacheInvalidatingValidatedCommandHandler<ChangeSupplierStatusCommand, Guid, ChangeSupplierStatusCommandHandler>(
+            command => [CacheKeys.SupplierDetails(command.SupplierId)]);
 
-        services.AddScoped<IQueryHandler<GetSupplierByIdQuery, SupplierDetailsDto?>, GetSupplierByIdQueryHandler>();
+        services.AddScoped<GetSupplierByIdQueryHandler>();
+        services.AddScoped<IQueryHandler<GetSupplierByIdQuery, SupplierDetailsDto?>>(serviceProvider =>
+            new CachingQueryHandlerDecorator<GetSupplierByIdQuery, SupplierDetailsDto?>(
+                serviceProvider.GetRequiredService<GetSupplierByIdQueryHandler>(),
+                serviceProvider.GetRequiredService<IDistributedCache>(),
+                serviceProvider.GetRequiredService<ILogger<CachingQueryHandlerDecorator<GetSupplierByIdQuery, SupplierDetailsDto?>>>()));
         services.AddScoped<IQueryHandler<GetSuppliersQuery, PagedResult<SupplierListItemDto>>, GetSuppliersQueryHandler>();
 
         services.AddScoped<IValidator<EvaluateSupplierRiskCommand>, EvaluateSupplierRiskCommandValidator>();
-        services.AddValidatedCommandHandler<EvaluateSupplierRiskCommand, EvaluateSupplierRiskResult, EvaluateSupplierRiskCommandHandler>();
+        services.AddCacheInvalidatingValidatedCommandHandler<EvaluateSupplierRiskCommand, EvaluateSupplierRiskResult, EvaluateSupplierRiskCommandHandler>(
+            command => [CacheKeys.SupplierDetails(command.SupplierId)]);
 
         services.AddScoped<IValidator<AcknowledgeEarlyWarningCommand>, AcknowledgeEarlyWarningCommandValidator>();
         services.AddValidatedCommandHandler<AcknowledgeEarlyWarningCommand, Guid, AcknowledgeEarlyWarningCommandHandler>();
@@ -47,6 +58,29 @@ public static class DependencyInjection
         services.AddScoped<IQueryHandler<GetActiveEarlyWarningsQuery, IReadOnlyList<ActiveEarlyWarningDto>>, GetActiveEarlyWarningsQueryHandler>();
 
         services.AddScoped<IDomainEventHandler<SupplierRiskAssessedEvent>, SupplierRiskAssessedEventHandler>();
+
+        return services;
+    }
+
+    private static IServiceCollection AddCacheInvalidatingValidatedCommandHandler<TCommand, TResult, THandler>(
+        this IServiceCollection services,
+        Func<TCommand, IEnumerable<string>> cacheKeyFactory)
+        where TCommand : class, ICommand<TResult>
+        where THandler : class, ICommandHandler<TCommand, TResult>
+    {
+        services.AddScoped<THandler>();
+        services.AddScoped<ICommandHandler<TCommand, TResult>>(serviceProvider =>
+        {
+            var invalidatingHandler = new CacheInvalidatingCommandHandlerDecorator<TCommand, TResult>(
+                serviceProvider.GetRequiredService<THandler>(),
+                serviceProvider.GetRequiredService<IDistributedCache>(),
+                cacheKeyFactory,
+                serviceProvider.GetRequiredService<ILogger<CacheInvalidatingCommandHandlerDecorator<TCommand, TResult>>>());
+
+            return new ValidationCommandHandlerDecorator<TCommand, TResult>(
+                invalidatingHandler,
+                serviceProvider.GetServices<IValidator<TCommand>>());
+        });
 
         return services;
     }
