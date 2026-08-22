@@ -25,6 +25,14 @@ builder.Services.AddStackExchangeRedisCache(options =>
 {
     options.Configuration = builder.Configuration.GetConnectionString("Redis")
         ?? throw new InvalidOperationException("Redis connection configuration was not found.");
+
+    if (IsPublicPlaceholder(options.Configuration))
+    {
+        throw new InvalidOperationException(
+            "Redis connection configuration contains a public placeholder. " +
+            "Set ConnectionStrings:Redis with User Secrets or the " +
+            "ConnectionStrings__Redis environment variable.");
+    }
 });
 
 builder.Services
@@ -48,9 +56,12 @@ var signingKey = jwtOptions.SigningKey
 
 if (string.IsNullOrWhiteSpace(jwtOptions.Issuer) ||
     string.IsNullOrWhiteSpace(jwtOptions.Audience) ||
+    IsPublicPlaceholder(signingKey) ||
     Encoding.UTF8.GetByteCount(signingKey) < 32)
 {
-    throw new InvalidOperationException("JWT configuration is invalid.");
+    throw new InvalidOperationException(
+        "JWT configuration is invalid. Set Jwt:SigningKey to a non-placeholder value of at least 32 UTF-8 " +
+        "bytes with User Secrets or the Jwt__SigningKey environment variable.");
 }
 
 builder.Services
@@ -100,3 +111,6 @@ using (var scope = app.Services.CreateScope())
 }
 
 app.Run();
+
+static bool IsPublicPlaceholder(string value) =>
+    value.Contains("<YOUR_", StringComparison.OrdinalIgnoreCase);

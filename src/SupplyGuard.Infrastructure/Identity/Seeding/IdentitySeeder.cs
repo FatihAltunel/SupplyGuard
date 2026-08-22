@@ -67,10 +67,12 @@ public sealed class IdentitySeeder(
     {
         if (string.IsNullOrWhiteSpace(options.UserName) ||
             string.IsNullOrWhiteSpace(options.Email) ||
-            string.IsNullOrWhiteSpace(options.Password))
+            string.IsNullOrWhiteSpace(options.Password) ||
+            options.Password.Contains("<YOUR_", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException(
-                "Identity:InitialAdministrator configuration must provide UserName, Email, and Password.");
+                "Identity:InitialAdministrator configuration must provide UserName, Email, and a non-placeholder " +
+                "Password through User Secrets or environment variables.");
         }
     }
 

@@ -5,6 +5,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <UserSecretsId>SupplyGuard.WebAPI-65f01e60-55c4-47f1-b89c-84f367f2f26f</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>

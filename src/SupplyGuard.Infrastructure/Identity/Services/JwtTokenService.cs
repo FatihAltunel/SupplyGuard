@@ -208,6 +208,7 @@ public sealed class JwtTokenService(
     {
         if (string.IsNullOrWhiteSpace(_options.Issuer) ||
             string.IsNullOrWhiteSpace(_options.Audience) ||
+            (_options.SigningKey?.Contains("<YOUR_", StringComparison.OrdinalIgnoreCase) ?? true) ||
             Encoding.UTF8.GetByteCount(_options.SigningKey ?? string.Empty) < 32 ||
             _options.AccessTokenLifetimeMinutes <= 0 ||
             _options.RefreshTokenLifetimeDays <= 0)

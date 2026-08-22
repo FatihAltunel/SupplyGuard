@@ -18,6 +18,13 @@ public static class DependencyInjection
         var connectionString = configuration.GetConnectionString("SupplyGuardDatabase")
             ?? throw new InvalidOperationException("Connection string 'SupplyGuardDatabase' was not found.");
 
+        if (connectionString.Contains("<YOUR_", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                "Connection string 'SupplyGuardDatabase' contains a public placeholder. " +
+                "Set it with User Secrets or the ConnectionStrings__SupplyGuardDatabase environment variable.");
+        }
+
         services.AddScoped<AuditingSaveChangesInterceptor>();
         services.AddDbContext<SupplyGuardDbContext>((serviceProvider, options) =>
         {
