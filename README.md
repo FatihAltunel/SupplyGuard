@@ -6,7 +6,7 @@ SupplyGuard is an enterprise-level risk management platform designed to predict 
 ## 🏗️ Architecture
 This project is strictly built on **Clean Architecture (Onion Architecture)** principles. The domain logic is completely isolated from external frameworks, ensuring a highly testable and maintainable codebase. 
 
-The application utilizes the **CQRS Pattern** via MediatR to segregate read and write operations, optimizing performance and scalability.
+The application uses **CQRS** with Pure DI, explicit handlers, and decorators. It does not use MediatR or MassTransit.
 
 ## 🚀 Tech Stack
 * **Backend:** .NET 8, ASP.NET Core Web API
@@ -24,3 +24,7 @@ The application utilizes the **CQRS Pattern** via MediatR to segregate read and 
 
 ## 👨‍💻 Developer
 **Fatih Altunel** | Software Engineer specializing in the .NET ecosystem, Clean Architecture, and enterprise-level system modernization.
+
+## Sprint 7 messaging
+
+See [RabbitMQ publishing setup and validation](docs/SPRINT7_MESSAGING.md) for broker configuration, outbox activation, and the optional live-broker test.
