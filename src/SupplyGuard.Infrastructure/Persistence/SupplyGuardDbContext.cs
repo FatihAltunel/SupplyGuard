@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
+using SupplyGuard.Application.Common.Messaging;
 using SupplyGuard.Domain.Common;
 using SupplyGuard.Domain.Entities;
 using SupplyGuard.Infrastructure.Identity.Entities;
@@ -20,6 +21,7 @@ public sealed class SupplyGuardDbContext(DbContextOptions<SupplyGuardDbContext> 
     public DbSet<EarlyWarning> EarlyWarnings => Set<EarlyWarning>();
     public DbSet<XAIAuditLog> XAIAuditLogs => Set<XAIAuditLog>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
+    public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
