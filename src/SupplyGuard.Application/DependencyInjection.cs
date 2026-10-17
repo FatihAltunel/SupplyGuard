@@ -58,6 +58,7 @@ public static class DependencyInjection
         services.AddScoped<IQueryHandler<GetActiveEarlyWarningsQuery, IReadOnlyList<ActiveEarlyWarningDto>>, GetActiveEarlyWarningsQueryHandler>();
 
         services.AddScoped<IDomainEventHandler<SupplierRiskAssessedEvent>, SupplierRiskAssessedEventHandler>();
+        services.AddScoped<IDomainEventHandler<EarlyWarningTriggeredEvent>, EarlyWarningTriggeredEventHandler>();
 
         return services;
     }

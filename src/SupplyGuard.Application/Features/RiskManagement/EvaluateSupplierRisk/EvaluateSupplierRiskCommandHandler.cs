@@ -10,6 +10,7 @@ public sealed class EvaluateSupplierRiskCommandHandler(
     IRiskManagementRepository riskManagementRepository,
     IRiskAssessmentService riskAssessmentService,
     IDomainEventHandler<SupplierRiskAssessedEvent> supplierRiskAssessedEventHandler,
+    IDomainEventHandler<EarlyWarningTriggeredEvent> earlyWarningTriggeredEventHandler,
     ICurrentUserService currentUserService,
     TimeProvider timeProvider)
     : ICommandHandler<EvaluateSupplierRiskCommand, EvaluateSupplierRiskResult>
@@ -53,6 +54,17 @@ public sealed class EvaluateSupplierRiskCommandHandler(
             .Single(domainEvent => domainEvent.RiskAssessmentId == assessmentResult.Assessment.Id);
 
         await supplierRiskAssessedEventHandler.HandleAsync(assessedEvent, cancellationToken);
+
+        if (assessmentResult.EarlyWarning is not null)
+        {
+            var warningEvent = supplier.DomainEvents
+                .OfType<EarlyWarningTriggeredEvent>()
+                .Single(domainEvent => domainEvent.EarlyWarningId == assessmentResult.EarlyWarning.Id);
+
+            await earlyWarningTriggeredEventHandler.HandleAsync(warningEvent, cancellationToken);
+        }
+
+        // Business changes, audit log, and outbox messages share this atomic commit.
         await riskManagementRepository.SaveChangesAsync(cancellationToken);
         supplier.ClearDomainEvents();
 
