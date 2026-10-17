@@ -1,5 +1,6 @@
 using SupplyGuard.Application.Common.Events;
 using SupplyGuard.Application.Common.Interfaces;
+using SupplyGuard.Application.Common.Messaging;
 using SupplyGuard.Application.Features.RiskManagement.AcknowledgeEarlyWarning;
 using SupplyGuard.Application.Features.RiskManagement.EvaluateSupplierRisk;
 using SupplyGuard.Application.Features.RiskManagement.Events;
@@ -17,16 +18,25 @@ public class RiskManagementUseCaseTests
         new(2026, 8, 19, 12, 0, 0, TimeSpan.Zero);
 
     [Fact]
-    public async Task EvaluateSupplierRisk_PersistsAssessmentWarningAndPendingAuditLog()
+    public async Task EvaluateSupplierRisk_StagesWarningMessageBeforeSavingOnce()
     {
         var supplier = CreateSupplierWithIndicator(90m);
         var repository = new FakeRiskManagementRepository(supplier);
+        var outboxWriter = new FakeOutboxWriter();
+        repository.OnSaving = () =>
+        {
+            Assert.Single(outboxWriter.Messages);
+            Assert.Single(repository.AuditLogs);
+            Assert.Single(supplier.EarlyWarnings);
+            Assert.NotEmpty(supplier.DomainEvents);
+        };
         IDomainEventHandler<SupplierRiskAssessedEvent> eventHandler =
             new SupplierRiskAssessedEventHandler(repository);
         var handler = new EvaluateSupplierRiskCommandHandler(
             repository,
             new RiskAssessmentService(),
             eventHandler,
+            new EarlyWarningTriggeredEventHandler(outboxWriter),
             new FakeCurrentUserService(Guid.NewGuid()),
             new FixedTimeProvider(AssessedAtUtc));
 
@@ -43,8 +53,67 @@ public class RiskManagementUseCaseTests
         Assert.Equal(ExplanationStatus.Pending, auditLog.ExplanationStatus);
         Assert.Equal(result.Value.RiskAssessmentId, auditLog.RiskAssessmentId);
         Assert.Equal("risk-assessment-001", auditLog.CorrelationId);
+        var message = Assert.IsType<EarlyWarningRaisedV1>(Assert.Single(outboxWriter.Messages));
+        Assert.NotEqual(Guid.Empty, message.MessageId);
+        Assert.Equal(result.Value.EarlyWarningId, message.WarningId);
+        Assert.Equal(supplier.Id, message.SupplierId);
+        Assert.Equal(result.Value.RiskAssessmentId, message.RiskAssessmentId);
+        Assert.Equal("Critical", message.Severity);
+        Assert.Equal("risk-assessment-001", message.CorrelationId);
+        Assert.Equal(AssessedAtUtc, message.OccurredAtUtc);
         Assert.Equal(1, repository.SaveChangesCount);
         Assert.Empty(supplier.DomainEvents);
+    }
+
+    [Fact]
+    public async Task EvaluateSupplierRisk_WithoutWarning_DoesNotStageNotification()
+    {
+        var supplier = CreateSupplierWithIndicator(65m);
+        var repository = new FakeRiskManagementRepository(supplier);
+        var outboxWriter = new FakeOutboxWriter();
+        var handler = new EvaluateSupplierRiskCommandHandler(
+            repository,
+            new RiskAssessmentService(),
+            new SupplierRiskAssessedEventHandler(repository),
+            new EarlyWarningTriggeredEventHandler(outboxWriter),
+            new FakeCurrentUserService(Guid.NewGuid()),
+            new FixedTimeProvider(AssessedAtUtc));
+
+        var result = await handler.HandleAsync(new EvaluateSupplierRiskCommand(supplier.Id, "no-warning"));
+
+        Assert.True(result.IsSuccess);
+        Assert.Null(result.Value!.EarlyWarningId);
+        Assert.Empty(outboxWriter.Messages);
+        Assert.Equal(1, repository.SaveChangesCount);
+        Assert.Empty(supplier.DomainEvents);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task EvaluateSupplierRisk_StagingOrSaveFailure_DoesNotClearEvents(bool failStaging)
+    {
+        var supplier = CreateSupplierWithIndicator(90m);
+        var failure = new InvalidOperationException("Simulated persistence failure");
+        var repository = new FakeRiskManagementRepository(supplier)
+        {
+            SaveFailure = failStaging ? null : failure
+        };
+        var outboxWriter = new FakeOutboxWriter { Failure = failStaging ? failure : null };
+        var handler = new EvaluateSupplierRiskCommandHandler(
+            repository,
+            new RiskAssessmentService(),
+            new SupplierRiskAssessedEventHandler(repository),
+            new EarlyWarningTriggeredEventHandler(outboxWriter),
+            new FakeCurrentUserService(Guid.NewGuid()),
+            new FixedTimeProvider(AssessedAtUtc));
+
+        var thrown = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            handler.HandleAsync(new EvaluateSupplierRiskCommand(supplier.Id, "failed-warning")));
+
+        Assert.Same(failure, thrown);
+        Assert.Equal(failStaging ? 0 : 1, repository.SaveChangesCount);
+        Assert.Contains(supplier.DomainEvents, domainEvent => domainEvent is EarlyWarningTriggeredEvent);
     }
 
     [Fact]
@@ -122,6 +191,8 @@ public class RiskManagementUseCaseTests
         public List<XAIAuditLog> AuditLogs { get; } = [];
         public RiskAssessment? CurrentAssessment { get; init; }
         public int SaveChangesCount { get; private set; }
+        public Action? OnSaving { get; set; }
+        public Exception? SaveFailure { get; init; }
 
         public Task<Supplier?> GetSupplierForEvaluationAsync(Guid supplierId, CancellationToken cancellationToken = default) =>
             Task.FromResult<Supplier?>(supplier.Id == supplierId ? supplier : null);
@@ -146,7 +217,31 @@ public class RiskManagementUseCaseTests
         public Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
         {
             SaveChangesCount++;
+            OnSaving?.Invoke();
+            if (SaveFailure is not null)
+            {
+                return Task.FromException<int>(SaveFailure);
+            }
+
             return Task.FromResult(1);
+        }
+    }
+
+    private sealed class FakeOutboxWriter : IOutboxWriter
+    {
+        public List<IIntegrationMessage> Messages { get; } = [];
+        public Exception? Failure { get; init; }
+
+        public Task WriteAsync(IIntegrationMessage message, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (Failure is not null)
+            {
+                return Task.FromException(Failure);
+            }
+
+            Messages.Add(message);
+            return Task.CompletedTask;
         }
     }
 

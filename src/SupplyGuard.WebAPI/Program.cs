@@ -7,6 +7,7 @@ using SupplyGuard.Infrastructure;
 using SupplyGuard.Infrastructure.Identity.Entities;
 using SupplyGuard.Infrastructure.Identity.Jwt;
 using SupplyGuard.Infrastructure.Identity.Seeding;
+using SupplyGuard.Infrastructure.Messaging.RabbitMq;
 using SupplyGuard.Infrastructure.Persistence;
 using SupplyGuard.WebAPI.Authentication;
 using SupplyGuard.WebAPI.Authentication.Authorization;
@@ -21,6 +22,7 @@ builder.Services.Configure<InitialAdministratorOptions>(
     builder.Configuration.GetSection(InitialAdministratorOptions.SectionName));
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddRabbitMqMessaging(builder.Configuration);
 builder.Services.AddStackExchangeRedisCache(options =>
 {
     options.Configuration = builder.Configuration.GetConnectionString("Redis")
