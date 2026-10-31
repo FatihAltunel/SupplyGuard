@@ -6,11 +6,14 @@ using SupplyGuard.Application.Common.Caching;
 using SupplyGuard.Application.Common.CQRS;
 using SupplyGuard.Application.Common.CQRS.Validation;
 using SupplyGuard.Application.Common.Events;
+using SupplyGuard.Application.Common.Messaging.RiskAnalysis.V1;
 using SupplyGuard.Application.Features.RiskManagement.AcknowledgeEarlyWarning;
 using SupplyGuard.Application.Features.RiskManagement.EvaluateSupplierRisk;
 using SupplyGuard.Application.Features.RiskManagement.Events;
 using SupplyGuard.Application.Features.RiskManagement.GetActiveEarlyWarnings;
 using SupplyGuard.Application.Features.RiskManagement.GetSupplierCurrentRisk;
+using SupplyGuard.Application.Features.RiskManagement.RequestRiskAnalysis;
+using SupplyGuard.Application.Features.RiskManagement.ProcessRiskAnalysisCompleted;
 using SupplyGuard.Application.Features.Suppliers.ChangeSupplierStatus;
 using SupplyGuard.Application.Features.Suppliers.CreateSupplier;
 using SupplyGuard.Application.Features.Suppliers.GetSupplierById;
@@ -27,6 +30,15 @@ public static class DependencyInjection
     {
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<IRiskAssessmentService, RiskAssessmentService>();
+
+        services.AddScoped<IValidator<RiskAnalysisInputV1>, RiskAnalysisInputV1Validator>();
+        services.AddScoped<IValidator<RiskAnalysisRequestedEvent>, RiskAnalysisRequestedEventValidator>();
+        services.AddScoped<IValidator<RiskAnalysisCompletedEvent>, RiskAnalysisCompletedEventValidator>();
+        services.AddScoped<IValidator<RequestRiskAnalysisCommand>, RequestRiskAnalysisCommandValidator>();
+        services.AddValidatedCommandHandler<RequestRiskAnalysisCommand, RequestRiskAnalysisResult, CreateRequestRiskAnalysisCommandHandler>();
+        services.AddScoped<IValidator<ProcessRiskAnalysisCompletedCommand>, ProcessRiskAnalysisCompletedCommandValidator>();
+        services.AddCacheInvalidatingValidatedCommandHandler<ProcessRiskAnalysisCompletedCommand, ProcessRiskAnalysisCompletedResult, CreateProcessRiskAnalysisCompletedCommandHandler>(
+            command => [CacheKeys.SupplierDetails(command.Completion.SupplierId)]);
 
         services.AddScoped<IValidator<CreateSupplierCommand>, CreateSupplierCommandValidator>();
         services.AddValidatedCommandHandler<CreateSupplierCommand, Guid, CreateSupplierCommandHandler>();

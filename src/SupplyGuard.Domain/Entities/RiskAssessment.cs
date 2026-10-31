@@ -1,5 +1,6 @@
 using SupplyGuard.Domain.Common;
 using SupplyGuard.Domain.Enums;
+using SupplyGuard.Domain.Services;
 
 namespace SupplyGuard.Domain.Entities;
 
@@ -30,6 +31,25 @@ public class RiskAssessment : AuditableEntity
         AssessedAtUtc = assessedAtUtc.ToUniversalTime();
         Rationale = NormalizeOptionalText(rationale, 4_000);
         Outcome = NormalizeOptionalText(outcome, 1_000);
+    }
+
+    public static RiskAssessment FromModelScore(
+        Guid supplierId,
+        decimal score,
+        DateTimeOffset assessedAtUtc,
+        string rationale,
+        string? outcome = null,
+        Guid? createdByUserId = null)
+    {
+        if (decimal.Round(score, 2) != score)
+        {
+            throw new ArgumentOutOfRangeException(nameof(score), "Model scores allow at most two decimal places.");
+        }
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(rationale);
+        return new RiskAssessment(
+            supplierId, score, RiskLevelPolicy.FromScore(score), assessedAtUtc,
+            rationale, outcome, createdByUserId);
     }
 
     public void AddRiskScore(RiskScore riskScore, Guid? modifiedByUserId = null)
@@ -66,13 +86,7 @@ public class RiskAssessment : AuditableEntity
         }
 
         OverallRiskScore = Math.Round(_riskScores.Sum(score => score.Score * score.Weight) / totalWeight, 2, MidpointRounding.AwayFromZero);
-        OverallRiskLevel = OverallRiskScore switch
-        {
-            < 25 => RiskLevel.Low,
-            < 50 => RiskLevel.Medium,
-            < 75 => RiskLevel.High,
-            _ => RiskLevel.Critical
-        };
+        OverallRiskLevel = RiskLevelPolicy.FromScore(OverallRiskScore);
         AssessedAtUtc = _riskScores.Max(score => score.CalculatedAtUtc);
     }
 

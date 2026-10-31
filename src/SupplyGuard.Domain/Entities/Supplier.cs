@@ -111,8 +111,13 @@ public class Supplier : AuditableEntity
         ArgumentNullException.ThrowIfNull(riskAssessment);
         EnsureBelongsToSupplier(riskAssessment.SupplierId);
 
+        if (_riskAssessments.Any(existing => existing.Id == riskAssessment.Id))
+        {
+            throw new InvalidOperationException("The risk assessment has already been applied.");
+        }
+
         _riskAssessments.Add(riskAssessment);
-        LastRiskAssessmentAtUtc = riskAssessment.AssessedAtUtc;
+        AdvanceLastRiskAssessmentAt(riskAssessment.AssessedAtUtc);
         MarkAsModified(modifiedByUserId);
     }
 
@@ -141,7 +146,7 @@ public class Supplier : AuditableEntity
         }
 
         _riskAssessments.Add(assessment);
-        LastRiskAssessmentAtUtc = assessment.AssessedAtUtc;
+        AdvanceLastRiskAssessmentAt(assessment.AssessedAtUtc);
 
         if (result.EarlyWarning is not null)
         {
@@ -226,6 +231,14 @@ public class Supplier : AuditableEntity
 
         _xaiAuditLogs.Add(xaiAuditLog);
         MarkAsModified(modifiedByUserId);
+    }
+
+    private void AdvanceLastRiskAssessmentAt(DateTimeOffset assessedAtUtc)
+    {
+        if (LastRiskAssessmentAtUtc is null || assessedAtUtc > LastRiskAssessmentAtUtc)
+        {
+            LastRiskAssessmentAtUtc = assessedAtUtc;
+        }
     }
 
     private void EnsureBelongsToSupplier(Guid supplierId)

@@ -69,7 +69,7 @@ public sealed class RiskAssessmentService : IRiskAssessmentService
                 group.Category,
                 categoryScore,
                 normalizedCategoryWeight,
-                ToRiskLevel(categoryScore),
+                RiskLevelPolicy.FromScore(categoryScore),
                 assessmentTime,
                 explanation));
         }
@@ -94,14 +94,6 @@ public sealed class RiskAssessmentService : IRiskAssessmentService
 
         return new RiskAssessmentResult(assessment, warning);
     }
-
-    private static RiskLevel ToRiskLevel(decimal score) => score switch
-    {
-        < 25m => RiskLevel.Low,
-        < 50m => RiskLevel.Medium,
-        < 75m => RiskLevel.High,
-        _ => RiskLevel.Critical
-    };
 
     private static WarningSeverity ToWarningSeverity(RiskLevel riskLevel) => riskLevel switch
     {
