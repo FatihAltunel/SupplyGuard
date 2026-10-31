@@ -47,6 +47,7 @@ The `SupplyGuard.Domain` layer is implemented using Clean Architecture and stric
 - `XAIAuditLog : BaseEntity`
   - Immutable, append-only trace of an XAI model invocation.
   - Records supplier/assessment linkage, model name and version, correlation ID, request/response payloads, confidence score, latency, execution result, failure details, and execution time.
+  - The correlation ID serves as the strict Idempotency key for the RabbitMQ consumer. If an audit log with the incoming correlation ID already exists, the event is considered a duplicate and must be safely ignored
   - Intentionally does not inherit from `AuditableEntity`; audit records must never be updated after creation.
 
 ### Enums

@@ -19,7 +19,7 @@ Writing large blocks of code directly is strictly prohibited. We will manage the
 * **Architecture:** Clean Architecture (Onion Architecture), CQRS Pattern (MediatR), Repository Pattern
 * **Database & ORM:** PostgreSQL, Entity Framework Core (Code-First)
 * **Performance & Messaging:** Redis (Distributed/In-Memory Caching), RabbitMQ (Message Broker)
-* **AI & Big Data:** Apache Spark, XAI (Explainable AI) integrations
+* **AI & Big Data:** Python (FastAPI), Scikit-Learn (Isolation Forest), XAI (SHAP) - No Apache Spark for Phase 1/2.
 * **Security:** ASP.NET Core Identity, JWT, Role/Claim Based Authorization
 * **Quality & DevOps:** xUnit, Moq, Docker, Docker Compose
 
@@ -32,6 +32,6 @@ We will proceed step-by-step to preserve context. Do not discuss topics outside 
 * **Sprint 5:** Risk Analysis and Early Warning module development (Domain Logic).
 * **Sprint 6:** Performance optimization (Redis caching implementation).
 * **Sprint 7:** Asynchronous operations (RabbitMQ notification/log queues).
-* **Sprint 8:** Integration with XAI and Apache Spark external services (HTTP Client Factory / gRPC).
+* **Sprint 8:** Asynchronous ML Inference Pipeline Integration (FastAPI, Scikit-Learn, RabbitMQ & PostgreSQL) - Splitted into Phase A (Contract-First/Dummy Worker) and Phase B (Actual Model Training).
 * **Sprint 9:** Writing Unit Tests (xUnit, Moq).
 * **Sprint 10:** Orchestrating all services with Docker Compose.
