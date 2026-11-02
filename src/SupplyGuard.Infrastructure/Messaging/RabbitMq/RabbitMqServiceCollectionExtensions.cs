@@ -4,6 +4,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using RabbitMQ.Client;
 using SupplyGuard.Application.Common.Interfaces;
+using SupplyGuard.Infrastructure.Messaging.Serialization;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace SupplyGuard.Infrastructure.Messaging.RabbitMq;
 
@@ -28,6 +30,7 @@ public static class RabbitMqServiceCollectionExtensions
                 "RabbitMq error topology names must be valid and different from the normal notification topology.")
             .Validate(settings => settings.ConsumerPrefetchCount is >= 1 and <= 1_000,
                 "RabbitMq:ConsumerPrefetchCount must be between 1 and 1000.")
+            .Validate(ValidRiskAnalysisTopology, "Risk-analysis queue/exchange names must be valid and distinct from notification topology.")
             .Validate(settings => settings.ConsumerReconnectDelay > TimeSpan.Zero && settings.ConsumerReconnectDelay <= TimeSpan.FromMinutes(1),
                 "RabbitMq:ConsumerReconnectDelay must be positive and at most one minute.")
             .Validate(settings => settings.ConnectionTimeout > TimeSpan.Zero && settings.ConnectionTimeout <= TimeSpan.FromMinutes(1) &&
@@ -57,8 +60,10 @@ public static class RabbitMqServiceCollectionExtensions
                 TopologyRecoveryEnabled = false
             };
         });
+        services.TryAddSingleton<IIntegrationMessageSerializer, IntegrationMessageSerializer>();
         services.AddSingleton<IMessagePublisher, RabbitMqMessagePublisher>();
         services.AddHostedService<EarlyWarningNotificationConsumer>();
+        services.AddHostedService<RiskAnalysisCompletedConsumer>();
 
         // Register the transport before the hosted dispatcher; neither opens a connection during DI construction.
         return services.AddOutboxProcessing(configuration);
@@ -66,4 +71,15 @@ public static class RabbitMqServiceCollectionExtensions
 
     private static bool IsAmqpName(string value) =>
         !string.IsNullOrWhiteSpace(value) && Encoding.UTF8.GetByteCount(value) <= 255;
+
+    private static bool ValidRiskAnalysisTopology(RabbitMqOptions settings)
+    {
+        var queues = new[] { settings.NotificationQueueName, settings.NotificationErrorQueueName,
+            settings.RiskAnalysisRequestQueueName, settings.RiskAnalysisCompletedQueueName,
+            settings.RiskAnalysisInvalidQueueName, settings.RiskAnalysisCompletedErrorQueueName };
+        var exchanges = new[] { settings.ExchangeName, settings.NotificationErrorExchangeName,
+            settings.RiskAnalysisInvalidExchangeName, settings.RiskAnalysisCompletedErrorExchangeName };
+        return queues.All(IsAmqpName) && queues.Distinct(StringComparer.Ordinal).Count() == queues.Length &&
+            exchanges.All(IsAmqpName) && exchanges.Distinct(StringComparer.Ordinal).Count() == exchanges.Length;
+    }
 }

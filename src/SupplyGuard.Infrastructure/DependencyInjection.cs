@@ -6,6 +6,7 @@ using SupplyGuard.Application.Common.Interfaces;
 using SupplyGuard.Infrastructure.Identity.Jwt;
 using SupplyGuard.Infrastructure.Identity.Seeding;
 using SupplyGuard.Infrastructure.Identity.Services;
+using SupplyGuard.Infrastructure.Messaging.Serialization;
 using SupplyGuard.Infrastructure.Persistence;
 using SupplyGuard.Infrastructure.Persistence.Interceptors;
 using SupplyGuard.Infrastructure.Persistence.Outbox;
@@ -36,7 +37,9 @@ public static class DependencyInjection
             .ValidateOnStart();
 
         services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<IIntegrationMessageSerializer, IntegrationMessageSerializer>();
         services.AddScoped<OutboxDispatcher>();
+        services.AddScoped<IOutboxDispatcher>(provider => provider.GetRequiredService<OutboxDispatcher>());
         services.AddHostedService<OutboxProcessor>();
         return services;
     }
@@ -63,7 +66,12 @@ public static class DependencyInjection
         services.AddScoped<IIdentityService, IdentityService>();
         services.AddScoped<ITokenService, JwtTokenService>();
         services.AddScoped<ISupplierRepository, SupplierRepository>();
-        services.AddScoped<IRiskManagementRepository, RiskManagementRepository>();
+        services.AddScoped<RiskManagementRepository>();
+        services.AddScoped<IRiskManagementRepository>(provider => provider.GetRequiredService<RiskManagementRepository>());
+        services.AddScoped<IRiskAnalysisRepository>(provider => provider.GetRequiredService<RiskManagementRepository>());
+        services.AddScoped<IUnitOfWork, EfUnitOfWork>();
+        services.AddScoped<IOutboxReader, OutboxReader>();
+        services.TryAddSingleton<IIntegrationMessageSerializer, IntegrationMessageSerializer>();
         services.AddScoped<IOutboxWriter, OutboxWriter>();
         services.AddScoped<IdentitySeeder>();
 

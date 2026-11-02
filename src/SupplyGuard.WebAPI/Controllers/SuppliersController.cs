@@ -8,6 +8,8 @@ using SupplyGuard.Application.Features.Suppliers.GetSuppliers;
 using SupplyGuard.Application.Features.Suppliers.UpdateSupplier;
 using SupplyGuard.Application.Security;
 using SupplyGuard.Domain.Enums;
+using SupplyGuard.Application.Common.Messaging.RiskAnalysis.V1;
+using SupplyGuard.Application.Features.RiskManagement.RequestRiskAnalysis;
 
 namespace SupplyGuard.WebAPI.Controllers;
 
@@ -18,8 +20,24 @@ public sealed class SuppliersController(
     ICommandHandler<UpdateSupplierCommand, Guid> updateSupplierHandler,
     ICommandHandler<ChangeSupplierStatusCommand, Guid> changeSupplierStatusHandler,
     IQueryHandler<GetSupplierByIdQuery, SupplierDetailsDto?> getSupplierByIdHandler,
-    IQueryHandler<GetSuppliersQuery, PagedResult<SupplierListItemDto>> getSuppliersHandler) : ControllerBase
+    IQueryHandler<GetSuppliersQuery, PagedResult<SupplierListItemDto>> getSuppliersHandler,
+    ICommandHandler<RequestRiskAnalysisCommand, RequestRiskAnalysisResult> requestRiskAnalysisHandler) : ControllerBase
 {
+    [HttpPost("{id:guid}/analyze")]
+    [Authorize(Policy = Permissions.RiskAssessmentsCreate)]
+    [RequestSizeLimit(400_000)]
+    [ProducesResponseType<RequestRiskAnalysisResult>(StatusCodes.Status202Accepted)]
+    [ProducesResponseType<IReadOnlyCollection<Error>>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType<IReadOnlyCollection<Error>>(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<RequestRiskAnalysisResult>> Analyze(
+        Guid id, [FromBody] AnalyzeSupplierRequest request, CancellationToken cancellationToken)
+    {
+        var result = await requestRiskAnalysisHandler.HandleAsync(new RequestRiskAnalysisCommand(
+            id, new RiskAnalysisInputV1(request.FeatureSchemaVersion, request.ObservedAtUtc, request.Features)), cancellationToken);
+        if (result.IsSuccess) return Accepted(result.Value);
+        return HasError(result, "Supplier.NotFound") ? NotFound(result.Errors) : BadRequest(result.Errors);
+    }
+
     [HttpPost]
     [Authorize(Policy = Permissions.SuppliersCreate)]
     [ProducesResponseType<Guid>(StatusCodes.Status201Created)]

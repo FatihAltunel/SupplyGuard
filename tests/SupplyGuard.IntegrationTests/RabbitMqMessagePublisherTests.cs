@@ -1,3 +1,4 @@
+using SupplyGuard.Infrastructure.Messaging.Serialization;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -231,6 +232,6 @@ public class RabbitMqMessagePublisherTests
         }
 
         public RabbitMqMessagePublisher CreatePublisher() => new(
-            Factory.Object, Options.Create(Settings), TimeProvider.System, NullLogger<RabbitMqMessagePublisher>.Instance);
+            Factory.Object, Options.Create(Settings), TimeProvider.System, NullLogger<RabbitMqMessagePublisher>.Instance, new IntegrationMessageSerializer());
     }
 }

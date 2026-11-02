@@ -34,14 +34,22 @@ public sealed class SupplyGuardDbContext(DbContextOptions<SupplyGuardDbContext> 
 
     public override int SaveChanges()
     {
+        EnsureAppendOnlyAuditLogs();
         ApplySoftDeletes();
         return base.SaveChanges();
     }
 
     public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
     {
+        EnsureAppendOnlyAuditLogs();
         ApplySoftDeletes();
         return base.SaveChangesAsync(cancellationToken);
+    }
+
+    private void EnsureAppendOnlyAuditLogs()
+    {
+        if (ChangeTracker.Entries<XAIAuditLog>().Any(entry => entry.State is EntityState.Modified or EntityState.Deleted))
+            throw new InvalidOperationException("XAI audit logs are append-only.");
     }
 
     private void ApplySoftDeletes()

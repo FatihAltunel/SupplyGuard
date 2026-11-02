@@ -1,3 +1,4 @@
+using SupplyGuard.Infrastructure.Messaging.Serialization;
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -43,7 +44,7 @@ public class RabbitMqLiveTests
         var logger = new NotificationLogCollector<EarlyWarningNotificationConsumer>();
         using var consumer = new EarlyWarningNotificationConsumer(factory, Options.Create(settings), TimeProvider.System, logger);
         await using var publisher = new RabbitMqMessagePublisher(
-            factory, Options.Create(settings), TimeProvider.System, NullLogger<RabbitMqMessagePublisher>.Instance);
+            factory, Options.Create(settings), TimeProvider.System, NullLogger<RabbitMqMessagePublisher>.Instance, new IntegrationMessageSerializer());
         var message = new EarlyWarningRaisedV1(
             Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), null, "Critical", "live-consumer-test", DateTimeOffset.UtcNow);
 
@@ -115,7 +116,7 @@ public class RabbitMqLiveTests
         await using var inspectionConnection = await factory.CreateConnectionAsync(timeout.Token);
         await using var inspection = await inspectionConnection.CreateChannelAsync(cancellationToken: timeout.Token);
         await using var publisher = new RabbitMqMessagePublisher(
-            factory, Options.Create(settings), TimeProvider.System, NullLogger<RabbitMqMessagePublisher>.Instance);
+            factory, Options.Create(settings), TimeProvider.System, NullLogger<RabbitMqMessagePublisher>.Instance, new IntegrationMessageSerializer());
         var message = new EarlyWarningRaisedV1(
             Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), null, "Critical", "live-publisher-test", DateTimeOffset.UtcNow);
 

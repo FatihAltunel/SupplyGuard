@@ -6,6 +6,8 @@ namespace SupplyGuard.Infrastructure.Persistence.Configurations;
 
 public sealed class XAIAuditLogConfiguration : IEntityTypeConfiguration<XAIAuditLog>
 {
+    public const string CorrelationIdIndexName = "IX_xai_audit_logs_CorrelationId";
+
     public void Configure(EntityTypeBuilder<XAIAuditLog> builder)
     {
         builder.ToTable("xai_audit_logs");
@@ -27,7 +29,7 @@ public sealed class XAIAuditLogConfiguration : IEntityTypeConfiguration<XAIAudit
         builder.Property(log => log.FailureMessage).HasMaxLength(2000);
         builder.Property(log => log.ExecutedAtUtc).HasColumnType("timestamp with time zone").IsRequired();
 
-        builder.HasIndex(log => log.CorrelationId);
+        builder.HasIndex(log => log.CorrelationId).IsUnique().HasDatabaseName(CorrelationIdIndexName);
         builder.HasIndex(log => new { log.SupplierId, log.ExecutedAtUtc });
         builder.HasOne(log => log.Supplier)
             .WithMany(supplier => supplier.XAIAuditLogs)

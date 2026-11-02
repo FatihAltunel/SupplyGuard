@@ -1,3 +1,5 @@
+using SupplyGuard.Infrastructure.Messaging.Serialization;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -11,6 +13,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using SupplyGuard.Application.Common.Interfaces;
 using SupplyGuard.Application.Common.Messaging;
+using SupplyGuard.Application.Common.Messaging.RiskAnalysis.V1;
 using SupplyGuard.Infrastructure;
 using SupplyGuard.Infrastructure.Persistence;
 using SupplyGuard.Infrastructure.Persistence.Configurations;
@@ -23,6 +26,47 @@ namespace SupplyGuard.IntegrationTests;
 public class OutboxDispatcherTests
 {
     private static readonly DateTimeOffset Now = new(2026, 10, 16, 12, 0, 0, TimeSpan.Zero);
+
+    [Fact]
+    public async Task ImmediateRiskDispatch_PublishesOnce_AndRetainsProcessedRequestForAudit()
+    {
+        await using var store = await TestStore.CreateAsync();
+        var serializer = new IntegrationMessageSerializer();
+        var requested = RiskAnalysisFixtures.Requested();
+        await using var context = store.CreateContext();
+        await new OutboxWriter(context, serializer).WriteAsync(requested);
+        await context.SaveChangesAsync();
+        var publisher = new RecordingPublisher();
+        var dispatcher = CreateDispatcher(context, publisher, now: RiskAnalysisFixtures.Now);
+
+        Assert.True(await dispatcher.TryDispatchAsync(requested.MessageId));
+        Assert.True(await dispatcher.TryDispatchAsync(requested.MessageId));
+
+        var published = Assert.IsType<RiskAnalysisRequestedEvent>(Assert.Single(publisher.Messages));
+        Assert.Equal(requested.MessageId, published.MessageId);
+        Assert.Equal(requested.CorrelationId, published.CorrelationId);
+        var retained = await new OutboxReader(context).GetByMessageIdAsync(requested.MessageId);
+        Assert.NotNull(retained!.ProcessedAtUtc);
+        Assert.Contains(".000Z", retained.Payload);
+    }
+
+    [Fact]
+    public async Task ImmediateRiskDispatch_BrokerFailureLeavesDurableRequestPending()
+    {
+        await using var store = await TestStore.CreateAsync();
+        var requested = RiskAnalysisFixtures.Requested();
+        await using var context = store.CreateContext();
+        await new OutboxWriter(context, new IntegrationMessageSerializer()).WriteAsync(requested);
+        await context.SaveChangesAsync();
+        var publisher = new RecordingPublisher((_, _) => Task.FromException(new IOException("Broker unavailable")));
+        var dispatcher = CreateDispatcher(context, publisher, now: RiskAnalysisFixtures.Now);
+
+        Assert.False(await dispatcher.TryDispatchAsync(requested.MessageId));
+        var retained = await new OutboxReader(context).GetByMessageIdAsync(requested.MessageId);
+        Assert.Null(retained!.ProcessedAtUtc);
+        Assert.Equal(1, retained.RetryCount);
+        Assert.Equal(RiskAnalysisFixtures.Now.AddSeconds(30), retained.NextAttemptAtUtc);
+    }
 
     [Fact]
     public async Task Dispatch_OnlyDuePendingBatch_IsSavedAfterConfirmation()
@@ -209,7 +253,8 @@ public class OutboxDispatcherTests
         await worker.StartAsync(CancellationToken.None);
         try
         {
-            await secondDisposal.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            using var waitTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            while (contexts.Count < 2) await Task.Delay(10, waitTimeout.Token);
         }
         finally
         {
@@ -219,14 +264,23 @@ public class OutboxDispatcherTests
 
         Assert.True(contexts.Count >= 2);
         Assert.Equal(contexts.Count, contexts.Select(context => context.ContextId.InstanceId).Distinct().Count());
-        Assert.Equal(contexts.Count, disposalCount);
+        Assert.Equal(0, disposalCount); // Empty batches do not resolve a publisher.
         Assert.All(contexts, context => Assert.Throws<ObjectDisposedException>(() => _ = context.ChangeTracker));
     }
 
     private static OutboxDispatcher CreateDispatcher(
-        SupplyGuardDbContext context, IMessagePublisher publisher, int batchSize = 20, DateTimeOffset? now = null) =>
-        new(context, publisher, Options.Create(new OutboxProcessorOptions { BatchSize = batchSize }),
+        SupplyGuardDbContext context, IMessagePublisher publisher, int batchSize = 20, DateTimeOffset? now = null)
+    {
+        var services = new ServiceCollection();
+        var options = (DbContextOptions<SupplyGuardDbContext>)context.GetService<IDbContextOptions>();
+        services.AddScoped(_ => new SupplyGuardDbContext(options));
+        services.AddSingleton(publisher);
+        services.AddSingleton<IIntegrationMessageSerializer, IntegrationMessageSerializer>();
+        var provider = services.BuildServiceProvider();
+        return new OutboxDispatcher(provider.GetRequiredService<IServiceScopeFactory>(),
+            Options.Create(new OutboxProcessorOptions { BatchSize = batchSize }),
             new FixedTimeProvider(now ?? Now), NullLogger<OutboxDispatcher>.Instance);
+    }
 
     private static OutboxMessage CreateRow(DateTimeOffset occurredAtUtc)
     {

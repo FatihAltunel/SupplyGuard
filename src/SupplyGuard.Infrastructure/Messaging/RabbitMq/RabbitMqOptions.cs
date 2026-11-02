@@ -15,6 +15,12 @@ public sealed class RabbitMqOptions
     public string NotificationQueueName { get; set; } = "notification.queue";
     public string NotificationErrorExchangeName { get; set; } = "supplyguard.notification.errors";
     public string NotificationErrorQueueName { get; set; } = "notification.error.queue";
+    public string RiskAnalysisRequestQueueName { get; set; } = "risk-analysis.requested.queue";
+    public string RiskAnalysisCompletedQueueName { get; set; } = "risk-analysis.completed.queue";
+    public string RiskAnalysisInvalidExchangeName { get; set; } = "supplyguard.ml.errors";
+    public string RiskAnalysisInvalidQueueName { get; set; } = "risk-analysis.invalid.queue";
+    public string RiskAnalysisCompletedErrorExchangeName { get; set; } = "supplyguard.risk-analysis.errors";
+    public string RiskAnalysisCompletedErrorQueueName { get; set; } = "risk-analysis.completed.error.queue";
     public ushort ConsumerPrefetchCount { get; set; } = 10;
     public TimeSpan ConsumerReconnectDelay { get; set; } = TimeSpan.FromSeconds(5);
     public TimeSpan ConnectionTimeout { get; set; } = TimeSpan.FromSeconds(10);

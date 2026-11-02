@@ -1,3 +1,4 @@
+using SupplyGuard.Infrastructure.Messaging.Serialization;
 using System.Data;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
@@ -35,7 +36,7 @@ public class OutboxWriterTests
             .AddInterceptors(interceptor)
             .Options;
         await using var context = new SupplyGuardDbContext(options);
-        IOutboxWriter writer = new OutboxWriter(context);
+        IOutboxWriter writer = new OutboxWriter(context, new IntegrationMessageSerializer());
         var message = new EarlyWarningRaisedV1(
             Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), null, "Critical", "outbox-test",
             new DateTimeOffset(2026, 10, 16, 9, 0, 0, TimeSpan.Zero));

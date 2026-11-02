@@ -5,8 +5,30 @@ using SupplyGuard.Domain.Enums;
 
 namespace SupplyGuard.Infrastructure.Persistence.Repositories;
 
-public sealed class RiskManagementRepository(SupplyGuardDbContext dbContext) : IRiskManagementRepository
+public sealed class RiskManagementRepository(SupplyGuardDbContext dbContext) : IRiskManagementRepository, IRiskAnalysisRepository
 {
+    public Task<bool> AuditExistsByCorrelationIdAsync(string correlationId, CancellationToken cancellationToken = default) =>
+        dbContext.XAIAuditLogs.IgnoreQueryFilters().AsNoTracking()
+            .AnyAsync(log => log.CorrelationId == correlationId, cancellationToken);
+
+    public async Task<Supplier?> GetSupplierForAnalysisAsync(Guid supplierId, CancellationToken cancellationToken = default)
+    {
+        if (dbContext.Database.CurrentTransaction is null)
+            throw new InvalidOperationException("Supplier analysis requires an active transaction.");
+        if (dbContext.Database.IsNpgsql())
+        {
+            var suppliers = await dbContext.Suppliers.FromSqlInterpolated($"""
+                SELECT * FROM supplyguard.suppliers
+                WHERE "Id" = {supplierId} AND NOT "IsDeleted"
+                FOR UPDATE
+                """).IgnoreQueryFilters().AsTracking().ToListAsync(cancellationToken);
+            return suppliers.SingleOrDefault();
+        }
+        if (dbContext.Database.ProviderName != "Microsoft.EntityFrameworkCore.Sqlite")
+            throw new NotSupportedException("Risk analysis requires PostgreSQL (or SQLite for persistence tests).");
+        return await dbContext.Suppliers.SingleOrDefaultAsync(supplier => supplier.Id == supplierId, cancellationToken);
+    }
+
     public Task<Supplier?> GetSupplierForEvaluationAsync(
         Guid supplierId,
         CancellationToken cancellationToken = default) =>

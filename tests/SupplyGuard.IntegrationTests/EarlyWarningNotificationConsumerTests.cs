@@ -1,3 +1,4 @@
+using SupplyGuard.Infrastructure.Messaging.Serialization;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -39,7 +40,7 @@ public class EarlyWarningNotificationConsumerTests
                 return ValueTask.CompletedTask;
             });
         await using var publisher = new RabbitMqMessagePublisher(harness.Factory.Object, Options.Create(harness.Settings),
-            TimeProvider.System, NullLogger<RabbitMqMessagePublisher>.Instance);
+            TimeProvider.System, NullLogger<RabbitMqMessagePublisher>.Instance, new IntegrationMessageSerializer());
         var message = CreateMessage();
 
         await publisher.PublishAsync(message);

@@ -1,9 +1,10 @@
-using System.Text.Json;
+using System.Text;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using RabbitMQ.Client;
 using SupplyGuard.Application.Common.Interfaces;
 using SupplyGuard.Application.Common.Messaging;
+using SupplyGuard.Application.Common.Messaging.RiskAnalysis.V1;
 
 namespace SupplyGuard.Infrastructure.Messaging.RabbitMq;
 
@@ -12,13 +13,15 @@ public sealed class RabbitMqMessagePublisher(
     IConnectionFactory connectionFactory,
     IOptions<RabbitMqOptions> options,
     TimeProvider timeProvider,
-    ILogger<RabbitMqMessagePublisher> logger) : IMessagePublisher, IAsyncDisposable
+    ILogger<RabbitMqMessagePublisher> logger,
+    IIntegrationMessageSerializer serializer) : IMessagePublisher, IAsyncDisposable
 {
     private readonly SemaphoreSlim _publishLock = new(1, 1);
     private readonly RabbitMqOptions _settings = options.Value;
     private IConnection? _connection;
     private IChannel? _channel;
     private bool _disposed;
+    private bool _riskTopologyDeclared;
 
     public async Task PublishAsync(IIntegrationMessage message, CancellationToken cancellationToken = default)
     {
@@ -31,7 +34,7 @@ public sealed class RabbitMqMessagePublisher(
 
         ArgumentException.ThrowIfNullOrWhiteSpace(message.MessageType);
         ArgumentException.ThrowIfNullOrWhiteSpace(message.CorrelationId);
-        var body = JsonSerializer.SerializeToUtf8Bytes(message, message.GetType());
+        var body = Encoding.UTF8.GetBytes(serializer.Serialize(message));
         var properties = new BasicProperties
         {
             ContentType = "application/json",
@@ -52,6 +55,11 @@ public sealed class RabbitMqMessagePublisher(
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             var channel = await GetChannelAsync(token);
+            if (!_riskTopologyDeclared && message is RiskAnalysisRequestedEvent or RiskAnalysisCompletedEvent)
+            {
+                await RabbitMqTopology.DeclareRiskAnalysisAsync(channel, _settings, token, declareExchange: false);
+                _riskTopologyDeclared = true;
+            }
 
             // With both confirm options enabled, this await completes on ACK, and throws on NACK/basic.return.
             await channel.BasicPublishAsync(
@@ -121,6 +129,7 @@ public sealed class RabbitMqMessagePublisher(
 
     private async ValueTask DisposeChannelAsync()
     {
+        _riskTopologyDeclared = false;
         var channel = _channel;
         _channel = null;
         if (channel is not null)

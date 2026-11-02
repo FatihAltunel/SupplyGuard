@@ -592,7 +592,9 @@ namespace SupplyGuard.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("CorrelationId");
+                    b.HasIndex("CorrelationId")
+                        .IsUnique()
+                        .HasDatabaseName("IX_xai_audit_logs_CorrelationId");
 
                     b.HasIndex("RiskAssessmentId");
 

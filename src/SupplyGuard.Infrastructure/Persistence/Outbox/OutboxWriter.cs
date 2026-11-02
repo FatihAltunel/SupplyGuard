@@ -1,10 +1,9 @@
-using System.Text.Json;
 using SupplyGuard.Application.Common.Interfaces;
 using SupplyGuard.Application.Common.Messaging;
 
 namespace SupplyGuard.Infrastructure.Persistence.Outbox;
 
-public sealed class OutboxWriter(SupplyGuardDbContext dbContext) : IOutboxWriter
+public sealed class OutboxWriter(SupplyGuardDbContext dbContext, IIntegrationMessageSerializer serializer) : IOutboxWriter
 {
     public Task WriteAsync(
         IIntegrationMessage message,
@@ -14,7 +13,7 @@ public sealed class OutboxWriter(SupplyGuardDbContext dbContext) : IOutboxWriter
         cancellationToken.ThrowIfCancellationRequested();
 
         // Use the concrete type so warning-specific fields are retained in the payload.
-        var payload = JsonSerializer.Serialize(message, message.GetType());
+        var payload = serializer.Serialize(message);
         var outboxMessage = new OutboxMessage(
             message.MessageId,
             message.MessageType,

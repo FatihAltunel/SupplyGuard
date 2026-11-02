@@ -1,97 +1,105 @@
-using System.Text.Json;
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using SupplyGuard.Application.Common.Interfaces;
 using SupplyGuard.Application.Common.Messaging;
+using SupplyGuard.Application.Common.Messaging.RiskAnalysis.V1;
 
 namespace SupplyGuard.Infrastructure.Persistence.Outbox;
 
-/// <summary>
-/// Processes one bounded batch. Run one dispatcher instance at a time until database row claiming is added.
-/// Delivery is at least once: broker confirmation and database completion are separate operations.
-/// </summary>
+/// <summary>Each attempt owns a fresh scope, transaction, and PostgreSQL row claim.</summary>
 public sealed class OutboxDispatcher(
-    SupplyGuardDbContext dbContext,
-    IMessagePublisher publisher,
+    IServiceScopeFactory scopeFactory,
     IOptions<OutboxProcessorOptions> options,
     TimeProvider timeProvider,
-    ILogger<OutboxDispatcher> logger)
+    ILogger<OutboxDispatcher> logger) : IOutboxDispatcher
 {
     public async Task DispatchBatchAsync(CancellationToken cancellationToken = default)
     {
-        var settings = options.Value;
-        var now = timeProvider.GetUtcNow();
-        var pendingMessages = await dbContext.OutboxMessages
-            .Where(message => message.ProcessedAtUtc == null && message.NextAttemptAtUtc <= now)
-            .OrderBy(message => message.NextAttemptAtUtc)
-            .ThenBy(message => message.OccurredAtUtc)
-            .ThenBy(message => message.Id)
-            .Take(settings.BatchSize)
-            .ToListAsync(cancellationToken);
-
-        foreach (var outboxMessage in pendingMessages)
+        Guid[] ids;
+        await using (var scope = scopeFactory.CreateAsyncScope())
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            try
-            {
-                var message = Deserialize(outboxMessage);
-                using var timeout = new CancellationTokenSource(settings.PublishTimeout, timeProvider);
-                using var publishCancellation = CancellationTokenSource.CreateLinkedTokenSource(
-                    cancellationToken, timeout.Token);
-
-                // The publisher contract completes only after successful broker confirmation.
-                await publisher.PublishAsync(message, publishCancellation.Token);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception exception)
-            {
-                var delayMilliseconds = Math.Min(
-                    settings.MaxRetryDelay.TotalMilliseconds,
-                    settings.RetryDelay.TotalMilliseconds * Math.Pow(2, Math.Min(outboxMessage.RetryCount, 20)));
-                outboxMessage.RecordFailure(
-                    $"Dispatch failed: {exception.GetType().Name}",
-                    timeProvider.GetUtcNow().AddMilliseconds(delayMilliseconds));
-
-                // Exception messages/payloads may contain sensitive data; log only identifiers and type.
-                logger.LogWarning(
-                    "Outbox message {MessageId} failed with {FailureType}; attempt {RetryCount}, retry at {NextAttemptAtUtc}",
-                    outboxMessage.Id, exception.GetType().Name, outboxMessage.RetryCount, outboxMessage.NextAttemptAtUtc);
-
-                await dbContext.SaveChangesAsync(cancellationToken);
-                continue;
-            }
-
-            outboxMessage.MarkAsProcessed(timeProvider.GetUtcNow());
-
-            // Save outside the publish catch. A save failure must abort this batch and dispose the scope.
-            await dbContext.SaveChangesAsync(cancellationToken);
-            logger.LogInformation("Outbox message {MessageId} publication confirmed", outboxMessage.Id);
+            var context = scope.ServiceProvider.GetRequiredService<SupplyGuardDbContext>();
+            var now = timeProvider.GetUtcNow();
+            ids = await context.OutboxMessages.AsNoTracking()
+                .Where(message => message.ProcessedAtUtc == null && message.NextAttemptAtUtc <= now)
+                .OrderBy(message => message.NextAttemptAtUtc).ThenBy(message => message.OccurredAtUtc).ThenBy(message => message.Id)
+                .Take(options.Value.BatchSize).Select(message => message.Id).ToArrayAsync(cancellationToken);
         }
+        foreach (var id in ids) await TryDispatchAsync(id, cancellationToken);
     }
 
-    private static IIntegrationMessage Deserialize(OutboxMessage outboxMessage)
+    public async Task<bool> TryDispatchAsync(Guid messageId, CancellationToken cancellationToken = default)
     {
-        // An explicit allowlist keeps stored type names independent of CLR names and reflection.
-        IIntegrationMessage message = outboxMessage.MessageType switch
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var context = scope.ServiceProvider.GetRequiredService<SupplyGuardDbContext>();
+        await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
+        OutboxMessage? row;
+        if (context.Database.IsNpgsql())
         {
-            EarlyWarningRaisedV1.TypeName => JsonSerializer.Deserialize<EarlyWarningRaisedV1>(outboxMessage.Payload)
-                ?? throw new JsonException("The integration message payload is null."),
-            _ => throw new NotSupportedException("The integration message type is not supported.")
-        };
+            var rows = await context.OutboxMessages.FromSqlInterpolated($"""
+                SELECT * FROM supplyguard.outbox_messages WHERE "Id" = {messageId}
+                FOR UPDATE SKIP LOCKED
+                """).ToListAsync(cancellationToken);
+            row = rows.SingleOrDefault();
+        }
+        else if (context.Database.ProviderName == "Microsoft.EntityFrameworkCore.Sqlite")
+        {
+            // SQLite is used by workflow tests; production claims require PostgreSQL.
+            row = await context.OutboxMessages.SingleOrDefaultAsync(message => message.Id == messageId, cancellationToken);
+        }
+        else throw new NotSupportedException("Outbox dispatch requires PostgreSQL.");
 
-        if (message.MessageId != outboxMessage.Id ||
-            message.MessageType != outboxMessage.MessageType ||
-            message.CorrelationId != outboxMessage.CorrelationId ||
-            message.OccurredAtUtc != outboxMessage.OccurredAtUtc)
+        if (row is null) return false; // Missing or claimed by another dispatcher.
+        if (row.ProcessedAtUtc is not null) return true;
+        if (row.NextAttemptAtUtc > timeProvider.GetUtcNow()) return false;
+
+        var serializer = scope.ServiceProvider.GetRequiredService<IIntegrationMessageSerializer>();
+        var publisher = scope.ServiceProvider.GetRequiredService<IMessagePublisher>();
+        try
         {
-            throw new InvalidOperationException("The integration message metadata does not match the outbox record.");
+            var message = Deserialize(row, serializer);
+            using var timeout = new CancellationTokenSource(options.Value.PublishTimeout, timeProvider);
+            using var publication = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
+            await publisher.PublishAsync(message, publication.Token);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw; // Transaction disposal leaves the original row pending.
+        }
+        catch (Exception exception)
+        {
+            var settings = options.Value;
+            var milliseconds = Math.Min(settings.MaxRetryDelay.TotalMilliseconds,
+                settings.RetryDelay.TotalMilliseconds * Math.Pow(2, Math.Min(row.RetryCount, 20)));
+            row.RecordFailure($"Dispatch failed: {exception.GetType().Name}", timeProvider.GetUtcNow().AddMilliseconds(milliseconds));
+            logger.LogWarning("Outbox message {MessageId} deferred after {FailureType}; attempt {RetryCount}",
+                row.Id, exception.GetType().Name, row.RetryCount);
+            // Save failures propagate. A failed transaction is never reused by another attempt.
+            await context.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return false;
         }
 
+        row.MarkAsProcessed(timeProvider.GetUtcNow());
+        await context.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        logger.LogInformation("Outbox message {MessageId} publication confirmed", row.Id);
+        return true;
+    }
+
+    private static IIntegrationMessage Deserialize(OutboxMessage row, IIntegrationMessageSerializer serializer)
+    {
+        IIntegrationMessage message = row.MessageType switch
+        {
+            EarlyWarningRaisedV1.TypeName => serializer.Deserialize<EarlyWarningRaisedV1>(row.Payload),
+            RiskAnalysisRequestedEvent.TypeName => serializer.Deserialize<RiskAnalysisRequestedEvent>(row.Payload),
+            _ => throw new NotSupportedException("The outbox message type is not supported.")
+        };
+        if (message.MessageId != row.Id || message.MessageType != row.MessageType ||
+            message.CorrelationId != row.CorrelationId || message.OccurredAtUtc != row.OccurredAtUtc)
+            throw new InvalidOperationException("Integration message metadata does not match the outbox row.");
         return message;
     }
 }
