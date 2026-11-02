@@ -5,7 +5,8 @@ The API and worker communicate only through RabbitMQ. No trained model is involv
 ## Prepare the database
 
 Use a local development database and the existing secret/environment configuration.
-The migration is generated but is not applied automatically at API startup.
+Docker Compose runs a one-shot `migrations` container before starting `api`.
+The API process itself does not apply migrations. For a host-run API, apply them manually:
 
 ```powershell
 dotnet ef database update --project src/SupplyGuard.Infrastructure --startup-project src/SupplyGuard.WebAPI
@@ -27,18 +28,42 @@ HAVING COUNT(*) > 1;
 
 ## Start the services
 
-Start the existing Compose services with your ignored `.env` credentials:
+Set the database, broker, `JWT_SIGNING_KEY`, and `INITIAL_ADMIN_PASSWORD` values in
+your ignored `.env` file (see `.env.example`). The signing key must contain at least
+32 characters; the initial administrator password needs at least 12 characters with
+uppercase, lowercase, digits, and punctuation. Existing administrator passwords are
+not reset by seeding.
+
+Build and start the entire application:
 
 ```powershell
-docker compose up -d postgres redis rabbitmq
+docker compose up -d --build
 ```
 
-Configure/start the API as usual with its PostgreSQL, JWT, Redis, and RabbitMQ secrets.
-For a worker running locally, the default broker host is `localhost`, port `5672`,
-user/vhost `supplyguard`. Set `RABBITMQ_PASSWORD` to the existing broker password.
-For a worker on the Compose network, set `RABBITMQ_HOST=rabbitmq` instead.
+The Compose project includes `postgres`, `redis`, `rabbitmq`, `migrations`, `api`,
+and `ml-worker`. The migration container exits successfully after applying pending
+migrations; the API then seeds Identity and starts. Failed migrations prevent API
+startup. Both .NET image targets run as the image's non-root `app` user.
+
+- API / Swagger: `http://localhost:8080/swagger` (override the host port with `API_PORT`).
+- Worker readiness: `http://localhost:8000/health`.
+- Login: `POST http://localhost:8080/api/auth/login`, using `INITIAL_ADMIN_USERNAME`
+  (default `administrator`) and the initial password from `.env` for a new database.
+- Logs: `docker compose logs -f api ml-worker`; migration failures:
+  `docker compose logs migrations`.
+
+The container configuration uses the service hostnames `postgres`, `redis`, and
+`rabbitmq`, with PostgreSQL's internal port `5432`. Redis health does not block API
+startup; the cache connection uses `abortConnect=false`. This Compose setup exposes
+local development HTTP and Swagger on loopback. Local configuration files and `.env`
+secrets are excluded from the .NET build context and supplied at runtime instead.
+
+For an optional host-run worker, the default broker host is `localhost`, port `5672`,
+user/vhost `supplyguard`. Set `RABBITMQ_PASSWORD` to the existing broker password and
+stop the Compose worker first to avoid competing consumers and a port conflict:
 
 ```powershell
+docker compose stop ml-worker
 cd supplyguard-ml-worker
 python -m pip install -r requirements.txt
 python -m uvicorn main:app --port 8000

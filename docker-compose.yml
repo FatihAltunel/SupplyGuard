@@ -48,6 +48,81 @@ services:
       timeout: 5s
       retries: 5
 
+  migrations:
+    build:
+      context: .
+      dockerfile: src/SupplyGuard.WebAPI/Dockerfile
+      target: migrations
+    container_name: supplyguard-migrations
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SUPPLYGUARD_CONNECTION_STRING: "Host=postgres;Port=5432;Database=${POSTGRES_DB:-supplyguard_db};Username=${POSTGRES_USER:-supplyguard};Password=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in an ignored .env file}"
+
+  api:
+    build:
+      context: .
+      dockerfile: src/SupplyGuard.WebAPI/Dockerfile
+      target: api
+    container_name: supplyguard-api
+    restart: unless-stopped
+    init: true
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+      # An unhealthy Redis must not prevent the fail-open API from starting.
+      redis:
+        condition: service_started
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_HTTP_PORTS: "8080"
+      ConnectionStrings__SupplyGuardDatabase: "Host=postgres;Port=5432;Database=${POSTGRES_DB:-supplyguard_db};Username=${POSTGRES_USER:-supplyguard};Password=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in an ignored .env file}"
+      ConnectionStrings__Redis: "redis:6379,abortConnect=false"
+      RabbitMq__HostName: rabbitmq
+      RabbitMq__Port: "5672"
+      RabbitMq__UserName: "${RABBITMQ_USER:-supplyguard}"
+      RabbitMq__Password: "${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in an ignored .env file}"
+      RabbitMq__VirtualHost: "${RABBITMQ_VHOST:-supplyguard}"
+      RabbitMq__UseTls: "false"
+      Jwt__Issuer: "${JWT_ISSUER:-SupplyGuard.WebAPI}"
+      Jwt__Audience: "${JWT_AUDIENCE:-SupplyGuard.Client}"
+      Jwt__SigningKey: "${JWT_SIGNING_KEY:?Set JWT_SIGNING_KEY to at least 32 characters in the ignored .env file}"
+      Identity__InitialAdministrator__UserName: "${INITIAL_ADMIN_USERNAME:-administrator}"
+      Identity__InitialAdministrator__Email: "${INITIAL_ADMIN_EMAIL:-admin@supplyguard.local}"
+      Identity__InitialAdministrator__Password: "${INITIAL_ADMIN_PASSWORD:?Set INITIAL_ADMIN_PASSWORD in the ignored .env file}"
+    ports:
+      - "127.0.0.1:${API_PORT:-8080}:8080"
+
+  ml-worker:
+    build:
+      context: ./supplyguard-ml-worker
+      dockerfile: Dockerfile
+    container_name: supplyguard-ml-worker
+    restart: unless-stopped
+    init: true
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      RABBITMQ_USER: "${RABBITMQ_USER:-supplyguard}"
+      RABBITMQ_PASSWORD: "${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in an ignored .env file}"
+      RABBITMQ_VHOST: "${RABBITMQ_VHOST:-supplyguard}"
+      RABBITMQ_USE_TLS: "false"
+      RABBITMQ_EXCHANGE: supplyguard.events
+      RABBITMQ_REQUEST_QUEUE: risk-analysis.requested.queue
+      RABBITMQ_COMPLETED_QUEUE: risk-analysis.completed.queue
+      RABBITMQ_ERROR_EXCHANGE: supplyguard.ml.errors
+      RABBITMQ_ERROR_QUEUE: risk-analysis.invalid.queue
+    ports:
+      - "127.0.0.1:8000:8000"
+    # Uses the Dockerfile health check for broker, consumer, and inference readiness.
+
 volumes:
   supplyguard_postgres_data:
   supplyguard_redis_data:
