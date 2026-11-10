@@ -11,6 +11,8 @@ from config import Settings
 from inference import MockInference
 from rabbitmq import RabbitMQWorker
 
+import logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:

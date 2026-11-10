@@ -34,6 +34,13 @@ public sealed class RabbitMqMessagePublisher(
 
         ArgumentException.ThrowIfNullOrWhiteSpace(message.MessageType);
         ArgumentException.ThrowIfNullOrWhiteSpace(message.CorrelationId);
+        // Use the same v1 constants as the queue bindings. Preserve routing for other events.
+        var routingKey = message switch
+        {
+            RiskAnalysisRequestedEvent => RiskAnalysisRequestedEvent.TypeName,
+            RiskAnalysisCompletedEvent => RiskAnalysisCompletedEvent.TypeName,
+            _ => message.MessageType
+        };
         var body = Encoding.UTF8.GetBytes(serializer.Serialize(message));
         var properties = new BasicProperties
         {
@@ -64,11 +71,15 @@ public sealed class RabbitMqMessagePublisher(
             // With both confirm options enabled, this await completes on ACK, and throws on NACK/basic.return.
             await channel.BasicPublishAsync(
                 exchange: _settings.ExchangeName,
-                routingKey: message.MessageType,
+                routingKey: routingKey,
                 mandatory: true,
                 basicProperties: properties,
                 body: body,
                 cancellationToken: token);
+
+            logger.LogInformation(
+                "RabbitMQ publication confirmed for message {MessageId}: exchange {ExchangeName}, routing key {RoutingKey}",
+                message.MessageId, _settings.ExchangeName, routingKey);
         }
         catch
         {

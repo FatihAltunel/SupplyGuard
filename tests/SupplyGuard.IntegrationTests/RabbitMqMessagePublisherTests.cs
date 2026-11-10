@@ -10,6 +10,7 @@ using RabbitMQ.Client;
 using RabbitMQ.Client.Exceptions;
 using SupplyGuard.Application.Common.Interfaces;
 using SupplyGuard.Application.Common.Messaging;
+using SupplyGuard.Application.Common.Messaging.RiskAnalysis.V1;
 using SupplyGuard.Infrastructure.Messaging.RabbitMq;
 using SupplyGuard.Infrastructure.Persistence.Outbox;
 using Xunit;
@@ -18,6 +19,36 @@ namespace SupplyGuard.IntegrationTests;
 
 public class RabbitMqMessagePublisherTests
 {
+    [Fact]
+    public async Task Publish_RiskAnalysisRequest_UsesExactExchangeAndRoutingKeyAfterNotificationPublication()
+    {
+        var broker = new BrokerDouble();
+        var requestBindingDeclared = false;
+        broker.Channel.Setup(channel => channel.QueueBindAsync(
+                "risk-analysis.requested.queue", "supplyguard.events", "risk-analysis.requested.v1", null, false,
+                It.IsAny<CancellationToken>()))
+            .Callback(() => requestBindingDeclared = true)
+            .Returns(Task.CompletedTask);
+        broker.PublishOutcome = _ =>
+        {
+            if (broker.RoutingKey == "risk-analysis.requested.v1") Assert.True(requestBindingDeclared);
+            return ValueTask.CompletedTask;
+        };
+        await using var publisher = broker.CreatePublisher();
+        // Exercise the channel-reuse path as well as the new request publication.
+        await publisher.PublishAsync(CreateMessage());
+        var requested = RiskAnalysisFixtures.Requested();
+
+        await publisher.PublishAsync(requested);
+
+        broker.Channel.Verify(channel => channel.BasicPublishAsync(
+            "supplyguard.events", "risk-analysis.requested.v1", true,
+            It.Is<BasicProperties>(properties => properties.Type == "risk-analysis.requested.v1" && properties.Persistent),
+            It.IsAny<ReadOnlyMemory<byte>>(), It.IsAny<CancellationToken>()), Times.Once);
+        Assert.Equal(requested.CorrelationId, new IntegrationMessageSerializer()
+            .Deserialize<RiskAnalysisRequestedEvent>(System.Text.Encoding.UTF8.GetString(broker.Body)).CorrelationId);
+    }
+
     [Fact]
     public async Task Publish_WaitsForConfirmation_AndPreservesConcretePayloadAndIdentity()
     {
