@@ -6,6 +6,7 @@ using SupplyGuard.Application.Common.Interfaces;
 using SupplyGuard.Infrastructure.Identity.Jwt;
 using SupplyGuard.Infrastructure.Identity.Seeding;
 using SupplyGuard.Infrastructure.Identity.Services;
+using SupplyGuard.Infrastructure.Integrations;
 using SupplyGuard.Infrastructure.Messaging.Serialization;
 using SupplyGuard.Infrastructure.Persistence;
 using SupplyGuard.Infrastructure.Persistence.Interceptors;
@@ -16,6 +17,14 @@ namespace SupplyGuard.Infrastructure;
 
 public static class DependencyInjection
 {
+    /// <summary>Explicit demo opt-in. Never registered automatically for production.</summary>
+    public static IServiceCollection AddSimulatedSupplierIntegrations(this IServiceCollection services)
+    {
+        services.AddScoped<ISupplierPerformanceService, SimulatedSupplierPerformanceService>();
+        services.AddScoped<IFinancialIntegrationService, SimulatedFinancialIntegrationService>();
+        return services;
+    }
+
     public static IServiceCollection AddOutboxProcessing(this IServiceCollection services, IConfiguration configuration)
     {
         if (!services.Any(descriptor => descriptor.ServiceType == typeof(IMessagePublisher)))
@@ -66,6 +75,7 @@ public static class DependencyInjection
         services.AddScoped<IIdentityService, IdentityService>();
         services.AddScoped<ITokenService, JwtTokenService>();
         services.AddScoped<ISupplierRepository, SupplierRepository>();
+        services.AddScoped<ISupplierRiskIndicatorReader, SupplierRiskIndicatorReader>();
         services.AddScoped<RiskManagementRepository>();
         services.AddScoped<IRiskManagementRepository>(provider => provider.GetRequiredService<RiskManagementRepository>());
         services.AddScoped<IRiskAnalysisRepository>(provider => provider.GetRequiredService<RiskManagementRepository>());

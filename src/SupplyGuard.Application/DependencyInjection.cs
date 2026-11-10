@@ -7,6 +7,8 @@ using SupplyGuard.Application.Common.CQRS;
 using SupplyGuard.Application.Common.CQRS.Validation;
 using SupplyGuard.Application.Common.Events;
 using SupplyGuard.Application.Common.Messaging.RiskAnalysis.V1;
+using SupplyGuard.Application.Common.Messaging.RiskAnalysis.Jit.V1;
+using SupplyGuard.Application.Features.RiskManagement.RequestJitRiskAnalysis;
 using SupplyGuard.Application.Features.RiskManagement.AcknowledgeEarlyWarning;
 using SupplyGuard.Application.Features.RiskManagement.EvaluateSupplierRisk;
 using SupplyGuard.Application.Features.RiskManagement.Events;
@@ -26,6 +28,15 @@ namespace SupplyGuard.Application;
 
 public static class DependencyInjection
 {
+    /// <summary>Opt-in JIT contract. Register supplier-performance and financial adapters separately.</summary>
+    public static IServiceCollection AddJitRiskAnalysis(this IServiceCollection services)
+    {
+        services.AddScoped<IValidator<SupplierRiskFeatures>, SupplierRiskFeaturesValidator>();
+        services.AddScoped<IValidator<RequestJitRiskAnalysisCommand>, RequestJitRiskAnalysisCommandValidator>();
+        services.AddValidatedCommandHandler<RequestJitRiskAnalysisCommand, RequestJitRiskAnalysisResult, RequestJitRiskAnalysisCommandHandler>();
+        return services;
+    }
+
     public static IServiceCollection AddApplication(this IServiceCollection services)
     {
         services.AddSingleton(TimeProvider.System);

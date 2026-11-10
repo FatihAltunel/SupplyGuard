@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 using SupplyGuard.Application.Common.Interfaces;
 using SupplyGuard.Application.Common.Messaging;
 using SupplyGuard.Application.Common.Messaging.RiskAnalysis.V1;
+using SupplyGuard.Application.Common.Messaging.RiskAnalysis.Jit.V1;
 
 namespace SupplyGuard.Infrastructure.Persistence.Outbox;
 
@@ -95,6 +96,12 @@ public sealed class OutboxDispatcher(
         {
             EarlyWarningRaisedV1.TypeName => serializer.Deserialize<EarlyWarningRaisedV1>(row.Payload),
             RiskAnalysisRequestedEvent.TypeName => serializer.Deserialize<RiskAnalysisRequestedEvent>(row.Payload),
+            // These fields are AMQP metadata, deliberately absent from the worker's JSON body.
+            JitRiskAnalysisRequestedEvent.TypeName => serializer.Deserialize<JitRiskAnalysisRequestedEvent>(row.Payload) with
+            {
+                MessageId = row.Id,
+                OccurredAtUtc = row.OccurredAtUtc
+            },
             _ => throw new NotSupportedException("The outbox message type is not supported.")
         };
         if (message.MessageId != row.Id || message.MessageType != row.MessageType ||

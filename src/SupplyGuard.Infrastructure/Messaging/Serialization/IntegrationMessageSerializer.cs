@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using SupplyGuard.Application.Common.Interfaces;
 using SupplyGuard.Application.Common.Messaging;
 using SupplyGuard.Application.Common.Messaging.RiskAnalysis.V1;
+using SupplyGuard.Application.Common.Messaging.RiskAnalysis.Jit.V1;
 
 namespace SupplyGuard.Infrastructure.Messaging.Serialization;
 
@@ -19,11 +20,15 @@ public sealed class IntegrationMessageSerializer : IIntegrationMessageSerializer
     // Stateless validators are owned by this serializer, not captured from scoped DI.
     private readonly RiskAnalysisRequestedEventValidator _requests = new(new RiskAnalysisInputV1Validator());
     private readonly RiskAnalysisCompletedEventValidator _completions = new();
+    private readonly JitRiskAnalysisRequestedEventValidator _jitRequests = new();
 
     public string Serialize(IIntegrationMessage message)
     {
         ArgumentNullException.ThrowIfNull(message);
         Validate(message);
+        if (message is JitRiskAnalysisRequestedEvent &&
+            (message.MessageId == Guid.Empty || message.OccurredAtUtc == default || message.OccurredAtUtc.Offset != TimeSpan.Zero))
+            throw new JsonException("JIT publication requires persisted delivery metadata.");
         return JsonSerializer.Serialize(message, message.GetType(), IsRiskAnalysis(message.GetType()) ? StrictOptions : null);
     }
 
@@ -47,13 +52,15 @@ public sealed class IntegrationMessageSerializer : IIntegrationMessageSerializer
         {
             RiskAnalysisRequestedEvent requested => _requests.Validate(requested).IsValid,
             RiskAnalysisCompletedEvent completed => _completions.Validate(completed).IsValid,
+            JitRiskAnalysisRequestedEvent jit => _jitRequests.Validate(jit).IsValid,
             _ => true // Preserve the established early-warning format and validation path.
         };
-        if (!valid) throw new JsonException("Invalid risk-analysis v1 contract.");
+        if (!valid) throw new JsonException("Invalid risk-analysis contract.");
     }
 
     private static bool IsRiskAnalysis(Type type) =>
-        type == typeof(RiskAnalysisRequestedEvent) || type == typeof(RiskAnalysisCompletedEvent);
+        type == typeof(RiskAnalysisRequestedEvent) || type == typeof(RiskAnalysisCompletedEvent) ||
+        type == typeof(JitRiskAnalysisRequestedEvent);
 
     private static void RejectDuplicateMembers(JsonElement element)
     {

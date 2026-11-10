@@ -28,3 +28,5 @@ The application uses **CQRS** with Pure DI, explicit handlers, and decorators. I
 ## Sprint 7 messaging
 
 See [RabbitMQ publishing setup and validation](docs/SPRINT7_MESSAGING.md) for broker configuration, outbox activation, and the optional live-broker test.
+
+See [JIT risk-analysis request example](docs/JIT_RISK_ANALYSIS.md) for typed ML features, supplier integration abstractions, and the opt-in Pure DI/Outbox handler.
