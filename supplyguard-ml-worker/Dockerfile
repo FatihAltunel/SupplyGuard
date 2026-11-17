@@ -6,11 +6,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
 RUN python -m pip install --disable-pip-version-check -r requirements.txt \
     && useradd --create-home --uid 10001 worker
 
-COPY --chown=worker:worker main.py contracts.py rabbitmq.py inference.py validators.py config.py ./
+COPY --chown=worker:worker main.py schemas.py services.py rabbitmq.py config.py ./
 USER worker
 
 EXPOSE 8000

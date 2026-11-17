@@ -1,49 +1,38 @@
-"""Validated environment settings; credentials are never included in repr/errors."""
-
-from typing import Annotated, Self
-
-from pydantic import Field, SecretStr, StringConstraints, model_validator
+"""Environment settings; credentials are masked in repr."""
+from aio_pika.connection import make_url
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)]
-PositiveSeconds = Annotated[float, Field(gt=0, allow_inf_nan=False)]
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_prefix="RABBITMQ_",
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-        hide_input_in_errors=True,
-        frozen=True,
-    )
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    host: Name = "localhost"
-    port: Annotated[int, Field(ge=1, le=65535)] = 5672
-    user: Name = "supplyguard"
-    password: SecretStr = Field(min_length=1, repr=False)
-    vhost: Name = "supplyguard"
-    use_tls: bool = False
-    exchange: Name = "supplyguard.events"
-    request_queue: Name = "risk-analysis.requested.queue"
-    completed_queue: Name = "risk-analysis.completed.queue"
-    error_exchange: Name = "supplyguard.ml.errors"
-    error_queue: Name = "risk-analysis.invalid.queue"
-    prefetch_count: Annotated[int, Field(ge=1, le=65535)] = 1
-    connection_timeout_seconds: PositiveSeconds = 10
-    publish_timeout_seconds: PositiveSeconds = 10
-    retry_initial_seconds: PositiveSeconds = 1
-    retry_max_seconds: PositiveSeconds = 30
-    dedup_max_entries: Annotated[int, Field(ge=1)] = 10000
-    dedup_ttl_seconds: PositiveSeconds = 86400
+    mlflow_tracking_uri: str = "http://localhost:5000"
+    rabbitmq_url: SecretStr = SecretStr("amqp://guest:guest@localhost/")
+    # Preserve the existing Docker Compose environment. An explicit URL wins.
+    rabbitmq_host: str = "localhost"
+    rabbitmq_port: int = Field(default=5672, ge=1, le=65535)
+    rabbitmq_user: str = "guest"
+    rabbitmq_password: SecretStr = SecretStr("guest")
+    rabbitmq_vhost: str = "/"
+    rabbitmq_use_tls: bool = False
+    rabbitmq_request_queue: str = Field(default="supplyguard.risk.requests", min_length=1)
+    rabbitmq_response_queue: str = Field(default="supplyguard.risk.responses", min_length=1)
+    rabbitmq_publish_timeout: float = Field(default=10, gt=0, allow_inf_nan=False)
+    rabbitmq_retry_seconds: float = Field(default=5, gt=0, allow_inf_nan=False)
 
     @model_validator(mode="after")
-    def validate_topology(self) -> Self:
-        if self.retry_max_seconds < self.retry_initial_seconds:
-            raise ValueError("Retry maximum must be at least the initial delay.")
-        if len({self.request_queue, self.completed_queue, self.error_queue}) != 3:
-            raise ValueError("Request, completion, and error queues must be distinct.")
-        if self.exchange == self.error_exchange:
-            raise ValueError("Event and error exchanges must be distinct.")
+    def distinct_queues(self) -> "Settings":
+        components = {
+            "rabbitmq_host", "rabbitmq_port", "rabbitmq_user", "rabbitmq_password",
+            "rabbitmq_vhost", "rabbitmq_use_tls",
+        }
+        if "rabbitmq_url" not in self.model_fields_set and components & self.model_fields_set:
+            self.rabbitmq_url = SecretStr(str(make_url(
+                host=self.rabbitmq_host, port=self.rabbitmq_port, login=self.rabbitmq_user,
+                password=self.rabbitmq_password.get_secret_value(),
+                virtualhost=self.rabbitmq_vhost, ssl=self.rabbitmq_use_tls,
+            )))
+        if self.rabbitmq_request_queue == self.rabbitmq_response_queue:
+            raise ValueError("Request and response queues must be different.")
         return self

@@ -1,43 +1,45 @@
-"""FastAPI application setup, component lifecycle, and readiness endpoint."""
-
+"""FastAPI owns the model, explainer, and RabbitMQ background task."""
+import asyncio
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import cast
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from config import Settings
-from inference import MockInference
 from rabbitmq import RabbitMQWorker
+from services import RiskAnalysisService
 
-import logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    inference = MockInference()
-    worker = RabbitMQWorker(Settings(), inference)
+    settings = Settings()
+    service = await asyncio.to_thread(RiskAnalysisService.load, settings.mlflow_tracking_uri)
+    worker = RabbitMQWorker(settings, service)
+    app.state.model = service.model
+    app.state.classifier = service.classifier
+    app.state.explainer = service.explainer
+    app.state.service = service
     app.state.worker = worker
     try:
-        await inference.initialize()
-        # Includes capped exponential startup retries while RabbitMQ is unavailable.
         await worker.start()
         yield
     finally:
-        try:
-            await worker.stop()
-        finally:
-            await inference.close()
-            app.state.worker = None
+        await worker.stop()
+        service.is_ready = False
+        for name in ("worker", "service", "model", "classifier", "explainer"):
+            setattr(app.state, name, None)
 
 
-app = FastAPI(title="SupplyGuard Dummy ML Worker", lifespan=lifespan)
+app = FastAPI(title="SupplyGuard ML Worker", lifespan=lifespan)
 
 
 @app.get("/health")
 async def health(request: Request) -> JSONResponse:
-    worker = cast(RabbitMQWorker | None, getattr(request.app.state, "worker", None))
+    worker = getattr(request.app.state, "worker", None)
     rabbitmq_ready = worker is not None and worker.is_ready
     inference_ready = worker is not None and worker.inference_ready
     healthy = rabbitmq_ready and inference_ready
