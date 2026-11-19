@@ -158,6 +158,9 @@ namespace SupplyGuard.Infrastructure.Migrations
                     b.Property<DateTimeOffset?>("ProcessedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<DateTimeOffset?>("QuarantinedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<int>("RetryCount")
                         .HasColumnType("integer");
 
@@ -165,7 +168,7 @@ namespace SupplyGuard.Infrastructure.Migrations
 
                     b.HasIndex("NextAttemptAtUtc", "OccurredAtUtc", "Id")
                         .HasDatabaseName("ix_outbox_messages_pending")
-                        .HasFilter("\"ProcessedAtUtc\" IS NULL");
+                        .HasFilter("\"ProcessedAtUtc\" IS NULL AND \"QuarantinedAtUtc\" IS NULL");
 
                     b.ToTable("outbox_messages", "supplyguard");
                 });
@@ -534,6 +537,9 @@ namespace SupplyGuard.Infrastructure.Migrations
                     b.Property<Guid>("Id")
                         .HasColumnType("uuid");
 
+                    b.Property<DateTimeOffset?>("CompletedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<decimal>("ConfidenceScore")
                         .HasPrecision(5, 4)
                         .HasColumnType("numeric(5,4)");
@@ -547,9 +553,14 @@ namespace SupplyGuard.Infrastructure.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("ExplanationStatus")
+                        .IsConcurrencyToken()
                         .IsRequired()
                         .HasMaxLength(16)
                         .HasColumnType("character varying(16)");
+
+                    b.Property<string>("ExplanationText")
+                        .HasMaxLength(100000)
+                        .HasColumnType("character varying(100000)");
 
                     b.Property<string>("FailureCode")
                         .HasMaxLength(100)
@@ -575,10 +586,16 @@ namespace SupplyGuard.Infrastructure.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");
 
+                    b.Property<Guid?>("RequestMessageId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("RequestPayload")
                         .IsRequired()
                         .HasMaxLength(100000)
                         .HasColumnType("character varying(100000)");
+
+                    b.Property<DateTimeOffset?>("RequestedAtUtc")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("ResponsePayload")
                         .HasMaxLength(100000)

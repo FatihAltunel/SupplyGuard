@@ -9,4 +9,5 @@ public sealed class OutboxProcessorOptions
     public TimeSpan PublishTimeout { get; set; } = TimeSpan.FromSeconds(30);
     public TimeSpan RetryDelay { get; set; } = TimeSpan.FromSeconds(30);
     public TimeSpan MaxRetryDelay { get; set; } = TimeSpan.FromMinutes(5);
+    public bool RetryUseJitter { get; set; }
 }

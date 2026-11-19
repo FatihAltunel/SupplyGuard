@@ -20,11 +20,12 @@ public sealed class OutboxMessageConfiguration : IEntityTypeConfiguration<Outbox
         builder.Property(message => message.OccurredAtUtc).HasColumnType("timestamp with time zone").IsRequired();
         builder.Property(message => message.NextAttemptAtUtc).HasColumnType("timestamp with time zone").IsRequired();
         builder.Property(message => message.ProcessedAtUtc).HasColumnType("timestamp with time zone");
+        builder.Property(message => message.QuarantinedAtUtc).HasColumnType("timestamp with time zone");
         builder.Property(message => message.RetryCount).IsRequired();
         builder.Property(message => message.LastError).HasMaxLength(OutboxMessage.LastErrorMaxLength);
 
         builder.HasIndex(message => new { message.NextAttemptAtUtc, message.OccurredAtUtc, message.Id })
             .HasDatabaseName("ix_outbox_messages_pending")
-            .HasFilter("\"ProcessedAtUtc\" IS NULL");
+            .HasFilter("\"ProcessedAtUtc\" IS NULL AND \"QuarantinedAtUtc\" IS NULL");
     }
 }

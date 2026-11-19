@@ -13,6 +13,7 @@ using SupplyGuard.Application.Common.CQRS;
 using SupplyGuard.Application.Common.Interfaces;
 using SupplyGuard.Application.Common.Messaging;
 using SupplyGuard.Application.Common.Messaging.RiskAnalysis.Jit.V1;
+using SupplyGuard.Application.Common.Messaging.RiskAnalysis.Worker.V1;
 using SupplyGuard.Application.Features.RiskManagement.RequestJitRiskAnalysis;
 using SupplyGuard.Domain.Entities;
 using SupplyGuard.Domain.Enums;
@@ -56,6 +57,8 @@ public sealed class JitRiskAnalysisTests
         services.AddSimulatedSupplierIntegrations();
         services.AddScoped(_ => store.Context());
         services.AddScoped<ISupplierRepository, SupplierRepository>();
+        services.AddScoped<IXAIAuditLogRepository, XAIAuditLogRepository>();
+        services.AddScoped<IRiskAnalysisRepository, RiskManagementRepository>();
         services.AddScoped<ISupplierRiskIndicatorReader, SupplierRiskIndicatorReader>();
         services.AddScoped<IUnitOfWork, EfUnitOfWork>();
         services.AddScoped<IOutboxWriter, OutboxWriter>();
@@ -72,32 +75,37 @@ public sealed class JitRiskAnalysisTests
 
         await using var verification = store.Context();
         var row = await verification.OutboxMessages.SingleAsync();
+        var audit = await verification.XAIAuditLogs.SingleAsync();
+        Assert.Equal(ExplanationStatus.Pending, audit.ExplanationStatus);
+        Assert.Equal(row.Id, audit.RequestMessageId);
+        Assert.Equal(row.Payload, audit.RequestPayload);
+        Assert.Equal(Now, audit.RequestedAtUtc);
         Assert.Equal(accepted.Value!.RequestMessageId, row.Id);
         Assert.Equal("req-998877", row.CorrelationId);
-        Assert.Equal(JitRiskAnalysisRequestedEvent.TypeName, row.MessageType);
+        Assert.Equal(RiskAnalysisRequest.TypeName, row.MessageType);
         Assert.Equal(Now, row.OccurredAtUtc);
         Assert.Null(row.ProcessedAtUtc);
         using var document = JsonDocument.Parse(row.Payload);
         var body = document.RootElement;
-        Assert.Equal(new[] { "SupplierId", "CorrelationId", "Features" }, body.EnumerateObject().Select(property => property.Name));
+        Assert.Equal(new[] { "CorrelationId", "SupplierId", "averageDeliveryDelayDays", "onTimeDeliveryRate", "qualityDefectRate", "DeliveryDelayTrend_Percentage", "FinancialStabilityScore", "ActiveRiskIndicatorsCount" }, body.EnumerateObject().Select(property => property.Name));
         Assert.Equal(supplierId, body.GetProperty("SupplierId").GetGuid());
         Assert.Equal("req-998877", body.GetProperty("CorrelationId").GetString());
-        var features = body.GetProperty("Features");
-        Assert.Equal(6, features.EnumerateObject().Count());
-        Assert.Equal(1.5m, features.GetProperty("AverageDeliveryDelayDays").GetDecimal());
-        Assert.Equal(0.95m, features.GetProperty("OnTimeDeliveryRate").GetDecimal());
-        Assert.Equal(0.015m, features.GetProperty("QualityDefectRate").GetDecimal());
+        var features = body;
+        Assert.Equal(8, features.EnumerateObject().Count());
+        Assert.Equal(1.5m, features.GetProperty("averageDeliveryDelayDays").GetDecimal());
+        Assert.Equal(0.95m, features.GetProperty("onTimeDeliveryRate").GetDecimal());
+        Assert.Equal(0.015m, features.GetProperty("qualityDefectRate").GetDecimal());
         Assert.Equal(15m, features.GetProperty("DeliveryDelayTrend_Percentage").GetDecimal());
         Assert.Equal(85m, features.GetProperty("FinancialStabilityScore").GetDecimal());
         Assert.Equal(3, features.GetProperty("ActiveRiskIndicatorsCount").GetInt32());
 
         // A failed publication must retain the original body and AMQP identifiers.
-        var published = new List<JitRiskAnalysisRequestedEvent>();
+        var published = new List<RiskAnalysisRequest>();
         var publisher = new Mock<IMessagePublisher>();
         publisher.Setup(value => value.PublishAsync(It.IsAny<IIntegrationMessage>(), It.IsAny<CancellationToken>()))
             .Returns<IIntegrationMessage, CancellationToken>((message, _) =>
             {
-                published.Add(Assert.IsType<JitRiskAnalysisRequestedEvent>(message));
+                published.Add(Assert.IsType<RiskAnalysisRequest>(message));
                 return published.Count == 1 ? Task.FromException(new IOException("Broker unavailable")) : Task.CompletedTask;
             });
         var dispatchServices = new ServiceCollection();
@@ -154,7 +162,8 @@ public sealed class JitRiskAnalysisTests
         var writer = new Mock<IOutboxWriter>(MockBehavior.Strict);
         var handler = new RequestJitRiskAnalysisCommandHandler(new SupplierRepository(context),
             new SupplierRiskIndicatorReader(context), performance.Object, financial.Object,
-            new SupplierRiskFeaturesValidator(), writer.Object, unit.Object, new FixedTimeProvider(Now));
+            new SupplierRiskFeaturesValidator(), writer.Object, unit.Object, new FixedTimeProvider(Now),
+            new XAIAuditLogRepository(context), new RiskManagementRepository(context), new IntegrationMessageSerializer());
         var command = Command(scenario == "missing-supplier" ? Guid.NewGuid() : supplier.Id);
         if (scenario == "service-failure")
             await Assert.ThrowsAsync<IOException>(() => handler.HandleAsync(command));
@@ -192,12 +201,14 @@ public sealed class JitRiskAnalysisTests
         var handler = new RequestJitRiskAnalysisCommandHandler(new SupplierRepository(context),
             new SupplierRiskIndicatorReader(context), new SimulatedSupplierPerformanceService(),
             new SimulatedFinancialIntegrationService(), new SupplierRiskFeaturesValidator(),
-            new OutboxWriter(context, new IntegrationMessageSerializer()), unit.Object, new FixedTimeProvider(Now));
+            new OutboxWriter(context, new IntegrationMessageSerializer()), unit.Object, new FixedTimeProvider(Now),
+            new XAIAuditLogRepository(context), new RiskManagementRepository(context), new IntegrationMessageSerializer());
 
         await Assert.ThrowsAsync<DbUpdateException>(() => handler.HandleAsync(Command(supplier.Id)));
         unit.Verify(value => value.RollbackAsync(CancellationToken.None), Times.Once);
         Assert.Empty(context.ChangeTracker.Entries());
         Assert.Empty(await context.OutboxMessages.ToListAsync());
+        Assert.Empty(await context.XAIAuditLogs.ToListAsync());
     }
 
     [Theory]
@@ -227,29 +238,57 @@ public sealed class JitRiskAnalysisTests
     public void WorkerContract_RejectsMalformedPayloads(string scenario)
     {
         var serializer = new IntegrationMessageSerializer();
-        var message = new JitRiskAnalysisRequestedEvent(Guid.NewGuid(), "req-998877", new(1.5m, .95m, .015m, 15m, 85m, 3))
+        var message = new RiskAnalysisRequest("req-998877", Guid.NewGuid(), 1.5m, .95m, .015m, 15m, 85m, 3)
         {
             MessageId = Guid.NewGuid(), OccurredAtUtc = Now
         };
         var json = serializer.Serialize(message);
         var node = JsonNode.Parse(json)!;
-        var features = node["Features"]!.AsObject();
+        var features = node.AsObject();
         switch (scenario)
         {
             case "wrong-case": node["supplierId"] = node["SupplierId"]!.DeepClone(); node.AsObject().Remove("SupplierId"); break;
-            case "quoted-number": features["OnTimeDeliveryRate"] = "0.95"; break;
+            case "quoted-number": features["onTimeDeliveryRate"] = "0.95"; break;
             case "missing": features.Remove("ActiveRiskIndicatorsCount"); break;
             case "unknown": features["Unexpected"] = 1; break;
-            case "invalid-range": features["OnTimeDeliveryRate"] = 95; break;
+            case "invalid-range": features["onTimeDeliveryRate"] = 95; break;
             case "duplicate":
                 json = json.Replace("\"ActiveRiskIndicatorsCount\":3", "\"ActiveRiskIndicatorsCount\":3,\"ActiveRiskIndicatorsCount\":3");
                 break;
         }
         if (scenario != "duplicate") json = node.ToJsonString();
-        Assert.Throws<JsonException>(() => serializer.Deserialize<JitRiskAnalysisRequestedEvent>(json));
+        Assert.Throws<JsonException>(() => serializer.Deserialize<RiskAnalysisRequest>(json));
     }
 
     private static RequestJitRiskAnalysisCommand Command(Guid supplierId) => new(supplierId, "req-998877", 1.5m, .95m, .015m);
+
+    [Fact]
+    public async Task RequestReplay_ReusesOriginalOutboxAndAudit_AndRejectsChangedFeatures()
+    {
+        await using var store = await Store.CreateAsync();
+        Guid supplierId;
+        await using (var seed = store.Context()) supplierId = (await SeedAsync(seed)).Id;
+        async Task<Result<RequestJitRiskAnalysisResult>> SendAsync(RequestJitRiskAnalysisCommand command)
+        {
+            await using var context = store.Context();
+            await using var unit = new EfUnitOfWork(context);
+            var handler = new RequestJitRiskAnalysisCommandHandler(new SupplierRepository(context),
+                new SupplierRiskIndicatorReader(context), new SimulatedSupplierPerformanceService(),
+                new SimulatedFinancialIntegrationService(), new SupplierRiskFeaturesValidator(),
+                new OutboxWriter(context, new IntegrationMessageSerializer()), unit, new FixedTimeProvider(Now),
+                new XAIAuditLogRepository(context), new RiskManagementRepository(context), new IntegrationMessageSerializer());
+            return await handler.HandleAsync(command);
+        }
+        var accepted = await SendAsync(Command(supplierId));
+        var replay = await SendAsync(Command(supplierId));
+        Assert.True(accepted.IsSuccess);
+        Assert.Equal(accepted.Value, replay.Value);
+        var conflict = await SendAsync(Command(supplierId) with { OnTimeDeliveryRate = .5m });
+        Assert.Equal("RiskAnalysis.CorrelationConflict", Assert.Single(conflict.Errors).Code);
+        await using var verification = store.Context();
+        Assert.Equal(1, await verification.XAIAuditLogs.CountAsync());
+        Assert.Equal(1, await verification.OutboxMessages.CountAsync());
+    }
 
     private static async Task<Supplier> SeedAsync(SupplyGuardDbContext context)
     {
@@ -275,7 +314,7 @@ public sealed class JitRiskAnalysisTests
         public override DateTimeOffset GetUtcNow() => Now;
     }
 
-    private sealed class Store(SqliteConnection connection, IModel model) : IAsyncDisposable
+    internal sealed class Store(SqliteConnection connection, IModel model) : IAsyncDisposable
     {
         public static async Task<Store> CreateAsync()
         {

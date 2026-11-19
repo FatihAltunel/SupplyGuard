@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using SupplyGuard.Application.Common.Messaging;
 using SupplyGuard.Domain.Common;
 using SupplyGuard.Domain.Entities;
+using SupplyGuard.Domain.Enums;
 using SupplyGuard.Infrastructure.Identity.Entities;
 
 namespace SupplyGuard.Infrastructure.Persistence;
@@ -32,24 +33,40 @@ public sealed class SupplyGuardDbContext(DbContextOptions<SupplyGuardDbContext> 
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(SupplyGuardDbContext).Assembly);
     }
 
-    public override int SaveChanges()
+    public override int SaveChanges() => SaveChanges(true);
+
+    public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
         EnsureAppendOnlyAuditLogs();
         ApplySoftDeletes();
-        return base.SaveChanges();
+        return base.SaveChanges(acceptAllChangesOnSuccess);
     }
 
-    public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+    public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default) =>
+        SaveChangesAsync(true, cancellationToken);
+
+    public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
     {
         EnsureAppendOnlyAuditLogs();
         ApplySoftDeletes();
-        return base.SaveChangesAsync(cancellationToken);
+        return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
     }
 
     private void EnsureAppendOnlyAuditLogs()
     {
-        if (ChangeTracker.Entries<XAIAuditLog>().Any(entry => entry.State is EntityState.Modified or EntityState.Deleted))
-            throw new InvalidOperationException("XAI audit logs are append-only.");
+        string[] outcomeProperties = [nameof(XAIAuditLog.ExplanationStatus), nameof(XAIAuditLog.ExplanationText),
+            nameof(XAIAuditLog.ResponsePayload), nameof(XAIAuditLog.ConfidenceScore), nameof(XAIAuditLog.IsSuccessful),
+            nameof(XAIAuditLog.FailureCode), nameof(XAIAuditLog.FailureMessage), nameof(XAIAuditLog.CompletedAtUtc)];
+        foreach (var entry in ChangeTracker.Entries<XAIAuditLog>())
+        {
+            if (entry.State == EntityState.Deleted)
+                throw new InvalidOperationException("XAI audit logs cannot be deleted.");
+            if (entry.State != EntityState.Modified) continue;
+            if (entry.OriginalValues.GetValue<ExplanationStatus>(nameof(XAIAuditLog.ExplanationStatus)) != ExplanationStatus.Pending ||
+                entry.Entity.ExplanationStatus is not (ExplanationStatus.Completed or ExplanationStatus.Failed) ||
+                entry.Properties.Any(property => property.IsModified && !outcomeProperties.Contains(property.Metadata.Name)))
+                throw new InvalidOperationException("Only a pending XAI audit's terminal outcome can be updated.");
+        }
     }
 
     private void ApplySoftDeletes()

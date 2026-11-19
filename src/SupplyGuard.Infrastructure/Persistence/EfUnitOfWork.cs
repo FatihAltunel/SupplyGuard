@@ -37,8 +37,8 @@ public sealed class EfUnitOfWork(SupplyGuardDbContext dbContext) : IUnitOfWork, 
             var correlations = dbContext.ChangeTracker.Entries<XAIAuditLog>()
                 .Where(entry => entry.State == EntityState.Added)
                 .Select(entry => entry.Entity.CorrelationId).Distinct(StringComparer.Ordinal).ToArray();
-            if (correlations.Length == 1 && Guid.TryParseExact(correlations[0], "D", out var correlationId))
-                throw new DuplicateCorrelationException(correlationId, exception);
+            if (correlations.Length == 1)
+                throw new DuplicateCorrelationException(correlations[0], exception);
             throw;
         }
         await _transaction.DisposeAsync();

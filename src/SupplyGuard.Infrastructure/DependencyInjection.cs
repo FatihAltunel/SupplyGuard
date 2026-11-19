@@ -25,7 +25,7 @@ public static class DependencyInjection
         return services;
     }
 
-    public static IServiceCollection AddOutboxProcessing(this IServiceCollection services, IConfiguration configuration)
+    public static IServiceCollection AddOutboxProcessing(this IServiceCollection services, IConfiguration configuration, bool runBackgroundService = true)
     {
         if (!services.Any(descriptor => descriptor.ServiceType == typeof(IMessagePublisher)))
         {
@@ -49,11 +49,11 @@ public static class DependencyInjection
         services.TryAddSingleton<IIntegrationMessageSerializer, IntegrationMessageSerializer>();
         services.AddScoped<OutboxDispatcher>();
         services.AddScoped<IOutboxDispatcher>(provider => provider.GetRequiredService<OutboxDispatcher>());
-        services.AddHostedService<OutboxProcessor>();
+        if (runBackgroundService) services.AddHostedService<OutboxProcessor>();
         return services;
     }
 
-    public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
+    public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration, bool includeIdentityServices = true)
     {
         var connectionString = configuration.GetConnectionString("SupplyGuardDatabase")
             ?? throw new InvalidOperationException("Connection string 'SupplyGuardDatabase' was not found.");
@@ -72,10 +72,17 @@ public static class DependencyInjection
             options.AddInterceptors(serviceProvider.GetRequiredService<AuditingSaveChangesInterceptor>());
         });
 
-        services.AddScoped<IIdentityService, IdentityService>();
-        services.AddScoped<ITokenService, JwtTokenService>();
+        if (includeIdentityServices)
+        {
+            services.AddScoped<IIdentityService, IdentityService>();
+            services.AddScoped<ITokenService, JwtTokenService>();
+            services.AddScoped<IdentitySeeder>();
+        }
         services.AddScoped<ISupplierRepository, SupplierRepository>();
+        services.AddScoped<IXAIAuditLogRepository, XAIAuditLogRepository>();
         services.AddScoped<ISupplierRiskIndicatorReader, SupplierRiskIndicatorReader>();
+        services.TryAddScoped<ISupplierPerformanceService, UnavailableSupplierIntegrations>();
+        services.TryAddScoped<IFinancialIntegrationService, UnavailableSupplierIntegrations>();
         services.AddScoped<RiskManagementRepository>();
         services.AddScoped<IRiskManagementRepository>(provider => provider.GetRequiredService<RiskManagementRepository>());
         services.AddScoped<IRiskAnalysisRepository>(provider => provider.GetRequiredService<RiskManagementRepository>());
@@ -83,7 +90,7 @@ public static class DependencyInjection
         services.AddScoped<IOutboxReader, OutboxReader>();
         services.TryAddSingleton<IIntegrationMessageSerializer, IntegrationMessageSerializer>();
         services.AddScoped<IOutboxWriter, OutboxWriter>();
-        services.AddScoped<IdentitySeeder>();
+        services.TryAddSingleton<IRiskAnalysisResponseSerializer, RiskAnalysisResponseSerializer>();
 
         return services;
     }

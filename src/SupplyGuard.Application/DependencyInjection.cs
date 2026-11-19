@@ -16,6 +16,7 @@ using SupplyGuard.Application.Features.RiskManagement.GetActiveEarlyWarnings;
 using SupplyGuard.Application.Features.RiskManagement.GetSupplierCurrentRisk;
 using SupplyGuard.Application.Features.RiskManagement.RequestRiskAnalysis;
 using SupplyGuard.Application.Features.RiskManagement.ProcessRiskAnalysisCompleted;
+using SupplyGuard.Application.Features.RiskManagement.ProcessRiskAnalysisResponse;
 using SupplyGuard.Application.Features.Suppliers.ChangeSupplierStatus;
 using SupplyGuard.Application.Features.Suppliers.CreateSupplier;
 using SupplyGuard.Application.Features.Suppliers.GetSupplierById;
@@ -40,6 +41,7 @@ public static class DependencyInjection
     public static IServiceCollection AddApplication(this IServiceCollection services)
     {
         services.AddSingleton(TimeProvider.System);
+        services.AddScoped<ICommandHandler<ProcessRiskAnalysisResponseCommand, ProcessRiskAnalysisResponseResult>, ProcessRiskAnalysisResponseCommandHandler>();
         services.AddScoped<IRiskAssessmentService, RiskAssessmentService>();
 
         services.AddScoped<IValidator<RiskAnalysisInputV1>, RiskAnalysisInputV1Validator>();

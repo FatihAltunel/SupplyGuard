@@ -18,6 +18,7 @@ public sealed class OutboxMessage
     public DateTimeOffset OccurredAtUtc { get; private set; }
     public DateTimeOffset NextAttemptAtUtc { get; private set; }
     public DateTimeOffset? ProcessedAtUtc { get; private set; }
+    public DateTimeOffset? QuarantinedAtUtc { get; private set; }
     public int RetryCount { get; private set; }
     public string? LastError { get; private set; }
 
@@ -78,9 +79,17 @@ public sealed class OutboxMessage
         NextAttemptAtUtc = nextAttemptTime;
     }
 
+    public void Quarantine(string reason, DateTimeOffset quarantinedAtUtc)
+    {
+        EnsurePending();
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+        QuarantinedAtUtc = quarantinedAtUtc.ToUniversalTime();
+        LastError = reason.Length > LastErrorMaxLength ? reason[..LastErrorMaxLength] : reason;
+    }
+
     private void EnsurePending()
     {
-        if (ProcessedAtUtc is not null)
+        if (ProcessedAtUtc is not null || QuarantinedAtUtc is not null)
         {
             throw new InvalidOperationException("The message has already been processed.");
         }

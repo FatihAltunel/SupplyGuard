@@ -8,7 +8,8 @@ public sealed class RequestJitRiskAnalysisCommandValidator : AbstractValidator<R
     public RequestJitRiskAnalysisCommandValidator()
     {
         RuleFor(command => command.SupplierId).NotEmpty();
-        RuleFor(command => command.CorrelationId).NotEmpty().MaximumLength(OutboxMessage.CorrelationIdMaxLength);
+        RuleFor(command => command.CorrelationId).NotEmpty().MaximumLength(OutboxMessage.CorrelationIdMaxLength)
+            .Must(value => value is not null && value == value.Trim());
         RuleFor(command => command.AverageDeliveryDelayDays).GreaterThanOrEqualTo(0);
         RuleFor(command => command.OnTimeDeliveryRate).InclusiveBetween(0, 1);
         RuleFor(command => command.QualityDefectRate).InclusiveBetween(0, 1);

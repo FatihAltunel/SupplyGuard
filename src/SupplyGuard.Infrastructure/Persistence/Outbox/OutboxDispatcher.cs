@@ -2,10 +2,12 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using System.Text.Json;
 using SupplyGuard.Application.Common.Interfaces;
 using SupplyGuard.Application.Common.Messaging;
 using SupplyGuard.Application.Common.Messaging.RiskAnalysis.V1;
 using SupplyGuard.Application.Common.Messaging.RiskAnalysis.Jit.V1;
+using SupplyGuard.Application.Common.Messaging.RiskAnalysis.Worker.V1;
 
 namespace SupplyGuard.Infrastructure.Persistence.Outbox;
 
@@ -24,7 +26,7 @@ public sealed class OutboxDispatcher(
             var context = scope.ServiceProvider.GetRequiredService<SupplyGuardDbContext>();
             var now = timeProvider.GetUtcNow();
             ids = await context.OutboxMessages.AsNoTracking()
-                .Where(message => message.ProcessedAtUtc == null && message.NextAttemptAtUtc <= now)
+                .Where(message => message.ProcessedAtUtc == null && message.QuarantinedAtUtc == null && message.NextAttemptAtUtc <= now)
                 .OrderBy(message => message.NextAttemptAtUtc).ThenBy(message => message.OccurredAtUtc).ThenBy(message => message.Id)
                 .Take(options.Value.BatchSize).Select(message => message.Id).ToArrayAsync(cancellationToken);
         }
@@ -54,13 +56,26 @@ public sealed class OutboxDispatcher(
 
         if (row is null) return false; // Missing or claimed by another dispatcher.
         if (row.ProcessedAtUtc is not null) return true;
+        if (row.QuarantinedAtUtc is not null) return false;
         if (row.NextAttemptAtUtc > timeProvider.GetUtcNow()) return false;
 
         var serializer = scope.ServiceProvider.GetRequiredService<IIntegrationMessageSerializer>();
         var publisher = scope.ServiceProvider.GetRequiredService<IMessagePublisher>();
+        IIntegrationMessage message;
         try
         {
-            var message = Deserialize(row, serializer);
+            message = Deserialize(row, serializer);
+        }
+        catch (Exception exception) when (exception is JsonException or NotSupportedException or InvalidOperationException)
+        {
+            row.Quarantine($"Invalid retained contract: {exception.GetType().Name}", timeProvider.GetUtcNow());
+            await context.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            logger.LogError("Outbox message {MessageId} quarantined: invalid or legacy contract", row.Id);
+            return false;
+        }
+        try
+        {
             using var timeout = new CancellationTokenSource(options.Value.PublishTimeout, timeProvider);
             using var publication = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
             await publisher.PublishAsync(message, publication.Token);
@@ -74,6 +89,7 @@ public sealed class OutboxDispatcher(
             var settings = options.Value;
             var milliseconds = Math.Min(settings.MaxRetryDelay.TotalMilliseconds,
                 settings.RetryDelay.TotalMilliseconds * Math.Pow(2, Math.Min(row.RetryCount, 20)));
+            if (settings.RetryUseJitter) milliseconds *= 0.5 + Random.Shared.NextDouble() * 0.5;
             row.RecordFailure($"Dispatch failed: {exception.GetType().Name}", timeProvider.GetUtcNow().AddMilliseconds(milliseconds));
             logger.LogWarning("Outbox message {MessageId} deferred after {FailureType}; attempt {RetryCount}",
                 row.Id, exception.GetType().Name, row.RetryCount);
@@ -96,8 +112,8 @@ public sealed class OutboxDispatcher(
         {
             EarlyWarningRaisedV1.TypeName => serializer.Deserialize<EarlyWarningRaisedV1>(row.Payload),
             RiskAnalysisRequestedEvent.TypeName => serializer.Deserialize<RiskAnalysisRequestedEvent>(row.Payload),
-            // These fields are AMQP metadata, deliberately absent from the worker's JSON body.
-            JitRiskAnalysisRequestedEvent.TypeName => serializer.Deserialize<JitRiskAnalysisRequestedEvent>(row.Payload) with
+            JitRiskAnalysisRequestedEvent.TypeName => throw new NotSupportedException("Legacy wrapped JIT requests require explicit migration."),
+            RiskAnalysisRequest.TypeName => serializer.Deserialize<RiskAnalysisRequest>(row.Payload) with
             {
                 MessageId = row.Id,
                 OccurredAtUtc = row.OccurredAtUtc

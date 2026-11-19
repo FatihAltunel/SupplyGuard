@@ -147,7 +147,7 @@ public class OutboxDispatcherTests
     [InlineData("unknown")]
     [InlineData("malformed")]
     [InlineData("mismatched")]
-    public async Task Dispatch_InvalidMessage_RemainsPendingWithoutPublication(string scenario)
+    public async Task Dispatch_InvalidMessage_IsQuarantinedWithoutPublication(string scenario)
     {
         await using var store = await TestStore.CreateAsync();
         var row = CreateRow(Now.AddMinutes(-1));
@@ -164,7 +164,10 @@ public class OutboxDispatcherTests
         await using var verification = store.CreateContext();
         var pending = await verification.OutboxMessages.SingleAsync();
         Assert.Null(pending.ProcessedAtUtc);
-        Assert.Equal(1, pending.RetryCount);
+        Assert.Equal(0, pending.RetryCount);
+        Assert.NotNull(pending.QuarantinedAtUtc);
+        await CreateDispatcher(context, publisher).DispatchBatchAsync();
+        Assert.Empty(publisher.Messages);
     }
 
     [Fact]

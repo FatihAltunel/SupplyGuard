@@ -13,6 +13,10 @@ public class XAIAuditLog : BaseEntity
     public ExplanationStatus ExplanationStatus { get; private set; }
     public string RequestPayload { get; private set; } = null!;
     public string? ResponsePayload { get; private set; }
+    public string? ExplanationText { get; private set; }
+    public Guid? RequestMessageId { get; private set; }
+    public DateTimeOffset? RequestedAtUtc { get; private set; }
+    public DateTimeOffset? CompletedAtUtc { get; private set; }
     public decimal ConfidenceScore { get; private set; }
     public int LatencyMs { get; private set; }
     public bool IsSuccessful { get; private set; }
@@ -78,6 +82,55 @@ public class XAIAuditLog : BaseEntity
         {
             throw new ArgumentException("A rule-based explanation requires an explanation payload.", nameof(responsePayload));
         }
+    }
+
+    public static XAIAuditLog CreatePending(Guid supplierId, string correlationId, Guid requestMessageId,
+        string requestPayload, DateTimeOffset requestedAtUtc) => new(supplierId,
+            "SupplyGuard_JIT_Model", "unreported", correlationId, requestPayload, null, 0, 0, false,
+            requestedAtUtc, explanationStatus: ExplanationStatus.Pending)
+        {
+            RequestMessageId = RequireId(requestMessageId, nameof(requestMessageId)),
+            RequestedAtUtc = requestedAtUtc.ToUniversalTime()
+        };
+
+    public void Complete(decimal confidenceScore, string explanationText, string responsePayload, DateTimeOffset completedAtUtc)
+    {
+        EnsurePending(completedAtUtc);
+        // Validate every value before mutating the aggregate.
+        var score = RequireConfidenceScore(confidenceScore);
+        var explanation = RequireText(explanationText, nameof(explanationText), 100_000);
+        var payload = RequireText(responsePayload, nameof(responsePayload), 100_000);
+        ConfidenceScore = score;
+        ExplanationText = explanation;
+        ResponsePayload = payload;
+        IsSuccessful = true;
+        FailureCode = null;
+        FailureMessage = null;
+        CompletedAtUtc = completedAtUtc.ToUniversalTime();
+        ExplanationStatus = ExplanationStatus.Completed;
+    }
+
+    public void Fail(string errorMessage, string responsePayload, DateTimeOffset completedAtUtc)
+    {
+        EnsurePending(completedAtUtc);
+        var error = RequireText(errorMessage, nameof(errorMessage), 2_000);
+        var payload = RequireText(responsePayload, nameof(responsePayload), 100_000);
+        ConfidenceScore = 0;
+        ExplanationText = string.Empty;
+        ResponsePayload = payload;
+        IsSuccessful = false;
+        FailureCode = "ML_ANALYSIS_FAILED";
+        FailureMessage = error;
+        CompletedAtUtc = completedAtUtc.ToUniversalTime();
+        ExplanationStatus = ExplanationStatus.Failed;
+    }
+
+    private void EnsurePending(DateTimeOffset completedAtUtc)
+    {
+        if (ExplanationStatus != ExplanationStatus.Pending)
+            throw new InvalidOperationException("Only a pending audit can receive a result.");
+        if (completedAtUtc < (RequestedAtUtc ?? ExecutedAtUtc))
+            throw new ArgumentOutOfRangeException(nameof(completedAtUtc), "Completion cannot predate the request.");
     }
 
     private static Guid RequireId(Guid value, string parameterName) => value == Guid.Empty ? throw new ArgumentException("Identifier cannot be empty.", parameterName) : value;
