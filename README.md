@@ -249,4 +249,12 @@ The manual worker acceptance checks completed so far are a high-risk prediction,
 
 Further implementation notes are available in the [ML Worker guide](supplyguard-ml-worker/README.md), [JIT request integration notes](docs/JIT_RISK_ANALYSIS.md), and [RabbitMQ/Outbox guide](docs/SPRINT7_MESSAGING.md). The [original domain design](docs/ARCHITECTURE.md) and [Phase A walkthrough](docs/SPRINT8_PHASE_A_E2E.md) document earlier milestones and their contracts.
 
+## License
+
+SupplyGuard's original source code is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE). Use, modification, and redistribution are permitted for the purposes specified in the license, including its noncommercial and specified organizational uses.
+
+Commercial uses outside the permissions granted by this license require separate written permission from Fatih Altunel. Third-party dependencies remain subject to their own licenses. The full terms in [LICENSE](LICENSE) govern use of the project.
+
+Required Notice: Copyright (c) 2026 Fatih Altunel
+
 Built by **Fatih Altunel**.
