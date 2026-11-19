@@ -1,5 +1,11 @@
 # JIT risk analizi: Pure DI, CQRS ve Outbox
 
+> Bu belge ilk JIT örneğinin tarihsel sözleşmesini anlatır. Güncel handler düz
+> `RiskAnalysisRequest` üretir, aynı transaction'da Pending audit oluşturur ve
+> `AddWorkerRiskAnalysisLifecycle` migration'ını gerektirir. Güncel çalışma,
+> kuyruklar ve geçiş kuralları için [arka plan entegrasyonunu](BACKGROUND_RISK_ANALYSIS.md)
+> kullanın. Aşağıdaki `Features` sarmallı gövde yeni worker'a gönderilmez.
+
 Bu örnek istenen JSON gövdesini `risk-analysis.jit-requested.v1` mesaj tipiyle üretir.
 Mevcut `risk-analysis.requested.v1`, `/api/suppliers/{id}/analyze` ve ona bağlı XAI
 completion akışı ayrı kalır. Yeni handler isteği hazırlayıp Outbox'a kaydeder;

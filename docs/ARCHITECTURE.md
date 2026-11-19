@@ -45,10 +45,10 @@ The `SupplyGuard.Domain` layer is implemented using Clean Architecture and stric
   - Enforces controlled transitions for acknowledgement, resolution, and dismissal, including actor and timestamp data.
 
 - `XAIAuditLog : BaseEntity`
-  - Immutable, append-only trace of an XAI model invocation.
+  - Trace of an XAI model invocation. New worker requests create a Pending record that permits exactly one Completed/Failed transition through `Complete()`/`Fail()`.
   - Records supplier/assessment linkage, model name and version, correlation ID, request/response payloads, confidence score, latency, execution result, failure details, and execution time.
-  - The correlation ID serves as the strict Idempotency key for the RabbitMQ consumer. If an audit log with the incoming correlation ID already exists, the event is considered a duplicate and must be safely ignored
-  - Intentionally does not inherit from `AuditableEntity`; audit records must never be updated after creation.
+  - The correlation ID is a unique idempotency key. The worker consumer locks the row before applying its outcome; an identical terminal response is a no-op and a conflicting response is quarantined.
+  - Intentionally does not inherit from `AuditableEntity`; request identity and snapshots remain immutable, terminal outcomes cannot be overwritten, and records cannot be deleted. See [background risk analysis](BACKGROUND_RISK_ANALYSIS.md).
 
 ### Enums
 
@@ -64,7 +64,7 @@ The `SupplyGuard.Domain` layer is implemented using Clean Architecture and stric
 - **Constructor-enforced invariants:** Public parameterized constructors validate mandatory values, non-empty identifiers, score ranges, weight ranges, timestamp ordering, and model-execution outcomes before an entity enters a valid state.
 - **EF Core compatibility:** Every entity has a private parameterless constructor for materialization. This preserves encapsulation while remaining Code-First compatible.
 - **Aggregate boundaries:** `Supplier` validates that related risk records belong to its own identifier before adding them. Its child collections are exposed as read-only.
-- **Audit discipline:** Auditable entities use UTC `DateTimeOffset` values and nullable actor IDs. `XAIAuditLog` is append-only, has no state-mutation methods, and inherits directly from `BaseEntity`.
+- **Audit discipline:** Auditable entities use UTC `DateTimeOffset` values and nullable actor IDs. `XAIAuditLog` inherits directly from `BaseEntity`; only a Pending record's first terminal outcome may be updated. EF persistence also rejects identity changes, terminal rewrites, and deletion.
 - **Risk calculation:** Normalized risk scores use the `0..100` range, indicator/score weights use the `(0..1]` range, and an assessment recalculates its weighted overall score from its category scores.
 
 ## Pending Infrastructure Rules (For Sprint 2)
