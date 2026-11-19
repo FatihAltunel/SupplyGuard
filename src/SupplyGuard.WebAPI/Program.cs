@@ -21,8 +21,16 @@ builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptio
 builder.Services.Configure<InitialAdministratorOptions>(
     builder.Configuration.GetSection(InitialAdministratorOptions.SectionName));
 builder.Services.AddApplication();
+builder.Services.AddJitRiskAnalysis();
 builder.Services.AddInfrastructure(builder.Configuration);
-builder.Services.AddRabbitMqMessaging(builder.Configuration);
+if (builder.Configuration.GetValue<bool>("JitRiskAnalysis:UseSimulatedIntegrations"))
+{
+    if (!builder.Environment.IsDevelopment())
+        throw new InvalidOperationException("Simulated supplier integrations are only supported in Development.");
+    builder.Services.AddSimulatedSupplierIntegrations();
+}
+builder.Services.AddRabbitMqMessaging(builder.Configuration,
+    builder.Configuration.GetValue("Messaging:RunBackgroundServices", true));
 builder.Services.AddStackExchangeRedisCache(options =>
 {
     options.Configuration = builder.Configuration.GetConnectionString("Redis")

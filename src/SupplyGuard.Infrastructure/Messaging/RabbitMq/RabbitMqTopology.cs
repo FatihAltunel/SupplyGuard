@@ -6,6 +6,14 @@ namespace SupplyGuard.Infrastructure.Messaging.RabbitMq;
 
 internal static class RabbitMqTopology
 {
+    public static async Task DeclareWorkerAsync(IChannel channel, RabbitMqOptions settings, CancellationToken cancellationToken)
+    {
+        // Match Python's durable queues without changing their type or declaration arguments.
+        foreach (var queue in new[] { settings.WorkerRequestQueueName, settings.WorkerResponseQueueName, settings.WorkerResponseErrorQueueName })
+            await channel.QueueDeclareAsync(queue, durable: true, exclusive: false, autoDelete: false,
+                cancellationToken: cancellationToken);
+    }
+
     public static async Task DeclareRiskAnalysisAsync(IChannel channel, RabbitMqOptions settings, CancellationToken token, bool declareExchange = true)
     {
         if (declareExchange)

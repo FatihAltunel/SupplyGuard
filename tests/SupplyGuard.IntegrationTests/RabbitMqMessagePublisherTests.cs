@@ -20,6 +20,30 @@ namespace SupplyGuard.IntegrationTests;
 public class RabbitMqMessagePublisherTests
 {
     [Fact]
+    public async Task Publish_WorkerRequest_UsesDefaultExchangeAndFlatJson_AndWaitsForConfirmation()
+    {
+        var broker = new BrokerDouble();
+        var confirmed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        broker.PublishOutcome = token => new ValueTask(confirmed.Task.WaitAsync(token));
+        await using var publisher = broker.CreatePublisher();
+        var request = WorkerRiskAnalysisFixtures.Request();
+        var publication = publisher.PublishAsync(request);
+        Assert.False(publication.IsCompleted);
+        Assert.True(broker.ChannelOptions!.PublisherConfirmationsEnabled);
+        Assert.True(broker.ChannelOptions.PublisherConfirmationTrackingEnabled);
+        broker.Channel.Verify(channel => channel.BasicPublishAsync("", "supplyguard.risk.requests", true,
+            It.Is<BasicProperties>(properties => properties.Persistent && properties.ContentType == "application/json" &&
+                properties.CorrelationId == request.CorrelationId && properties.MessageId == request.MessageId.ToString("D")),
+            It.IsAny<ReadOnlyMemory<byte>>(), It.IsAny<CancellationToken>()), Times.Once);
+        using var body = JsonDocument.Parse(broker.Body);
+        Assert.Equal(8, body.RootElement.EnumerateObject().Count());
+        Assert.False(body.RootElement.TryGetProperty("Features", out _));
+        Assert.Equal(.004m, body.RootElement.GetProperty("qualityDefectRate").GetDecimal());
+        confirmed.TrySetResult();
+        await publication;
+    }
+
+    [Fact]
     public async Task Publish_RiskAnalysisRequest_UsesExactExchangeAndRoutingKeyAfterNotificationPublication()
     {
         var broker = new BrokerDouble();
@@ -189,6 +213,7 @@ public class RabbitMqMessagePublisherTests
         Assert.False(factory.AutomaticRecoveryEnabled);
         var hostedServices = provider.GetServices<IHostedService>().ToArray();
         Assert.Single(hostedServices.OfType<OutboxProcessor>());
+        Assert.Single(hostedServices.OfType<RiskAnalysisResponseConsumer>());
         Assert.Single(hostedServices.OfType<EarlyWarningNotificationConsumer>());
         var publisher = provider.GetRequiredService<IMessagePublisher>();
         using var scope = provider.CreateScope();

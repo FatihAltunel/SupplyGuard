@@ -21,6 +21,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SupplyGuard.Application.Tes
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SupplyGuard.IntegrationTests", "tests\SupplyGuard.IntegrationTests\SupplyGuard.IntegrationTests.csproj", "{48A5A3F8-3672-479D-95B1-01C46890AD5C}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SupplyGuard.BackgroundWorker", "src\SupplyGuard.BackgroundWorker\SupplyGuard.BackgroundWorker.csproj", "{FE961112-561E-4337-848E-9518E699D73E}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -58,6 +60,10 @@ Global
 		{48A5A3F8-3672-479D-95B1-01C46890AD5C}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{48A5A3F8-3672-479D-95B1-01C46890AD5C}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{48A5A3F8-3672-479D-95B1-01C46890AD5C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{FE961112-561E-4337-848E-9518E699D73E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FE961112-561E-4337-848E-9518E699D73E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FE961112-561E-4337-848E-9518E699D73E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FE961112-561E-4337-848E-9518E699D73E}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{6FB2708E-5EFC-4856-B163-80FE5962810D} = {996661DD-D454-411B-96F7-074DA3482D20}
@@ -67,5 +73,6 @@ Global
 		{F4E7ED74-CA18-4904-A2F2-325014005B59} = {B2F8959A-22D4-4961-87CE-93C11014CCAD}
 		{E42E1950-CCD5-4CA6-B25E-F4D08C59C878} = {B2F8959A-22D4-4961-87CE-93C11014CCAD}
 		{48A5A3F8-3672-479D-95B1-01C46890AD5C} = {B2F8959A-22D4-4961-87CE-93C11014CCAD}
+		{FE961112-561E-4337-848E-9518E699D73E} = {996661DD-D454-411B-96F7-074DA3482D20}
 	EndGlobalSection
 EndGlobal

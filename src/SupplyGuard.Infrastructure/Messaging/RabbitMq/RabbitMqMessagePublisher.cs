@@ -5,6 +5,7 @@ using RabbitMQ.Client;
 using SupplyGuard.Application.Common.Interfaces;
 using SupplyGuard.Application.Common.Messaging;
 using SupplyGuard.Application.Common.Messaging.RiskAnalysis.V1;
+using SupplyGuard.Application.Common.Messaging.RiskAnalysis.Worker.V1;
 
 namespace SupplyGuard.Infrastructure.Messaging.RabbitMq;
 
@@ -14,14 +15,18 @@ public sealed class RabbitMqMessagePublisher(
     IOptions<RabbitMqOptions> options,
     TimeProvider timeProvider,
     ILogger<RabbitMqMessagePublisher> logger,
-    IIntegrationMessageSerializer serializer) : IMessagePublisher, IAsyncDisposable
+    IIntegrationMessageSerializer serializer,
+    RabbitMqConnectionRetry? connectionRetry = null) : IMessagePublisher, IAsyncDisposable
 {
     private readonly SemaphoreSlim _publishLock = new(1, 1);
     private readonly RabbitMqOptions _settings = options.Value;
+    private readonly RabbitMqConnectionRetry _connections = connectionRetry ?? new(connectionFactory, options,
+        timeProvider, Microsoft.Extensions.Logging.Abstractions.NullLogger<RabbitMqConnectionRetry>.Instance);
     private IConnection? _connection;
     private IChannel? _channel;
     private bool _disposed;
     private bool _riskTopologyDeclared;
+    private bool _workerTopologyDeclared;
 
     public async Task PublishAsync(IIntegrationMessage message, CancellationToken cancellationToken = default)
     {
@@ -37,10 +42,12 @@ public sealed class RabbitMqMessagePublisher(
         // Use the same v1 constants as the queue bindings. Preserve routing for other events.
         var routingKey = message switch
         {
+            RiskAnalysisRequest => _settings.WorkerRequestQueueName,
             RiskAnalysisRequestedEvent => RiskAnalysisRequestedEvent.TypeName,
             RiskAnalysisCompletedEvent => RiskAnalysisCompletedEvent.TypeName,
             _ => message.MessageType
         };
+        var exchange = message is RiskAnalysisRequest ? string.Empty : _settings.ExchangeName;
         var body = Encoding.UTF8.GetBytes(serializer.Serialize(message));
         var properties = new BasicProperties
         {
@@ -62,6 +69,11 @@ public sealed class RabbitMqMessagePublisher(
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             var channel = await GetChannelAsync(token);
+            if (!_workerTopologyDeclared && message is RiskAnalysisRequest)
+            {
+                await RabbitMqTopology.DeclareWorkerAsync(channel, _settings, token);
+                _workerTopologyDeclared = true;
+            }
             if (!_riskTopologyDeclared && message is RiskAnalysisRequestedEvent or RiskAnalysisCompletedEvent)
             {
                 await RabbitMqTopology.DeclareRiskAnalysisAsync(channel, _settings, token, declareExchange: false);
@@ -70,7 +82,7 @@ public sealed class RabbitMqMessagePublisher(
 
             // With both confirm options enabled, this await completes on ACK, and throws on NACK/basic.return.
             await channel.BasicPublishAsync(
-                exchange: _settings.ExchangeName,
+                exchange: exchange,
                 routingKey: routingKey,
                 mandatory: true,
                 basicProperties: properties,
@@ -79,7 +91,7 @@ public sealed class RabbitMqMessagePublisher(
 
             logger.LogInformation(
                 "RabbitMQ publication confirmed for message {MessageId}: exchange {ExchangeName}, routing key {RoutingKey}",
-                message.MessageId, _settings.ExchangeName, routingKey);
+                message.MessageId, exchange, routingKey);
         }
         catch
         {
@@ -99,7 +111,7 @@ public sealed class RabbitMqMessagePublisher(
         {
             await DisposeChannelAsync();
             await DisposeConnectionAsync();
-            _connection = await connectionFactory.CreateConnectionAsync(cancellationToken);
+            _connection = await _connections.ConnectAsync(cancellationToken);
             logger.LogInformation("RabbitMQ publishing connection established");
         }
 
@@ -141,6 +153,7 @@ public sealed class RabbitMqMessagePublisher(
     private async ValueTask DisposeChannelAsync()
     {
         _riskTopologyDeclared = false;
+        _workerTopologyDeclared = false;
         var channel = _channel;
         _channel = null;
         if (channel is not null)

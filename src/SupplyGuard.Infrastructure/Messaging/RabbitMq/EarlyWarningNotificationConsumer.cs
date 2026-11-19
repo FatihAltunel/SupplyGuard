@@ -12,9 +12,12 @@ public sealed class EarlyWarningNotificationConsumer(
     IConnectionFactory connectionFactory,
     IOptions<RabbitMqOptions> options,
     TimeProvider timeProvider,
-    ILogger<EarlyWarningNotificationConsumer> logger) : BackgroundService
+    ILogger<EarlyWarningNotificationConsumer> logger,
+    RabbitMqConnectionRetry? connectionRetry = null) : BackgroundService
 {
     private readonly RabbitMqOptions _settings = options.Value;
+    private readonly RabbitMqConnectionRetry _connections = connectionRetry ?? new(connectionFactory, options,
+        timeProvider, Microsoft.Extensions.Logging.Abstractions.NullLogger<RabbitMqConnectionRetry>.Instance);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -48,8 +51,7 @@ public sealed class EarlyWarningNotificationConsumer(
     private async Task ConsumeUntilInterruptedAsync(CancellationToken stoppingToken)
     {
         // This connection and both channels belong to the consumer, never to the singleton publisher.
-        await using var connection = await connectionFactory.CreateConnectionAsync(
-            $"{_settings.ClientProvidedName}.Notifications", stoppingToken);
+        await using var connection = await _connections.ConnectAsync(stoppingToken, $"{_settings.ClientProvidedName}.Notifications");
         await using var channel = await connection.CreateChannelAsync(
             new CreateChannelOptions(publisherConfirmationsEnabled: false, publisherConfirmationTrackingEnabled: false,
                 consumerDispatchConcurrency: 1), stoppingToken);

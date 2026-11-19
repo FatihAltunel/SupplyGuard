@@ -11,7 +11,7 @@ namespace SupplyGuard.Infrastructure.Messaging.RabbitMq;
 
 public static class RabbitMqServiceCollectionExtensions
 {
-    public static IServiceCollection AddRabbitMqMessaging(this IServiceCollection services, IConfiguration configuration)
+    public static IServiceCollection AddRabbitMqMessaging(this IServiceCollection services, IConfiguration configuration, bool runBackgroundServices = true)
     {
         services.AddOptions<RabbitMqOptions>()
             .Bind(configuration.GetSection(RabbitMqOptions.SectionName))
@@ -31,6 +31,17 @@ public static class RabbitMqServiceCollectionExtensions
             .Validate(settings => settings.ConsumerPrefetchCount is >= 1 and <= 1_000,
                 "RabbitMq:ConsumerPrefetchCount must be between 1 and 1000.")
             .Validate(ValidRiskAnalysisTopology, "Risk-analysis queue/exchange names must be valid and distinct from notification topology.")
+            .Validate(settings => new[] { settings.WorkerRequestQueueName, settings.WorkerResponseQueueName, settings.WorkerResponseErrorQueueName }
+                    .All(IsAmqpName) && new[] { settings.WorkerRequestQueueName, settings.WorkerResponseQueueName, settings.WorkerResponseErrorQueueName,
+                        settings.RiskAnalysisRequestQueueName, settings.RiskAnalysisCompletedQueueName, settings.NotificationQueueName,
+                        settings.NotificationErrorQueueName, settings.RiskAnalysisInvalidQueueName, settings.RiskAnalysisCompletedErrorQueueName }
+                    .Distinct(StringComparer.Ordinal).Count() == 9,
+                "Worker queues must have valid distinct names, separate from legacy queues.")
+            .Validate(settings => settings.ConnectionRetryCount is >= 1 and <= 10 &&
+                                  settings.ConnectionRetryDelay > TimeSpan.Zero &&
+                                  settings.ConnectionRetryMaxDelay >= settings.ConnectionRetryDelay &&
+                                  settings.ConnectionRetryMaxDelay <= TimeSpan.FromMinutes(1),
+                "RabbitMq connection retry settings are invalid.")
             .Validate(settings => settings.ConsumerReconnectDelay > TimeSpan.Zero && settings.ConsumerReconnectDelay <= TimeSpan.FromMinutes(1),
                 "RabbitMq:ConsumerReconnectDelay must be positive and at most one minute.")
             .Validate(settings => settings.ConnectionTimeout > TimeSpan.Zero && settings.ConnectionTimeout <= TimeSpan.FromMinutes(1) &&
@@ -61,12 +72,19 @@ public static class RabbitMqServiceCollectionExtensions
             };
         });
         services.TryAddSingleton<IIntegrationMessageSerializer, IntegrationMessageSerializer>();
+        services.TryAddSingleton<IRiskAnalysisResponseSerializer, RiskAnalysisResponseSerializer>();
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddSingleton<RabbitMqConnectionRetry>();
         services.AddSingleton<IMessagePublisher, RabbitMqMessagePublisher>();
-        services.AddHostedService<EarlyWarningNotificationConsumer>();
-        services.AddHostedService<RiskAnalysisCompletedConsumer>();
+        if (runBackgroundServices)
+        {
+            services.AddHostedService<EarlyWarningNotificationConsumer>();
+            services.AddHostedService<RiskAnalysisCompletedConsumer>();
+            services.AddHostedService<RiskAnalysisResponseConsumer>();
+        }
 
         // Register the transport before the hosted dispatcher; neither opens a connection during DI construction.
-        return services.AddOutboxProcessing(configuration);
+        return services.AddOutboxProcessing(configuration, runBackgroundServices);
     }
 
     private static bool IsAmqpName(string value) =>

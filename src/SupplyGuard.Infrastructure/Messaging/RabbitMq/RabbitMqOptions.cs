@@ -26,4 +26,11 @@ public sealed class RabbitMqOptions
     public TimeSpan ConnectionTimeout { get; set; } = TimeSpan.FromSeconds(10);
     public TimeSpan OperationTimeout { get; set; } = TimeSpan.FromSeconds(10);
     public TimeSpan PublishTimeout { get; set; } = TimeSpan.FromSeconds(30);
+    public string WorkerRequestQueueName { get; set; } = "supplyguard.risk.requests";
+    public string WorkerResponseQueueName { get; set; } = "supplyguard.risk.responses";
+    public string WorkerResponseErrorQueueName { get; set; } = "supplyguard.risk.responses.error";
+    public int ConnectionRetryCount { get; set; } = 3;
+    public TimeSpan ConnectionRetryDelay { get; set; } = TimeSpan.FromSeconds(2);
+    public TimeSpan ConnectionRetryMaxDelay { get; set; } = TimeSpan.FromSeconds(30);
+    public bool ConnectionRetryUseJitter { get; set; } = false;
 }
