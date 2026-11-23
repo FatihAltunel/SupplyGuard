@@ -1,7 +1,9 @@
 # SupplyGuard ML Worker
 
 Python 3.13 FastAPI servisi, MLflow Registry'deki
-`models:/SupplyGuard_JIT_Model/latest` modelini başlangıçta yükler.
+`models:/SupplyGuard_JIT_Model@champion` modelini başlangıçta yükler (`MLFLOW_MODEL_URI`
+ile değiştirilebilir). Alias bir kez somut sürüme çözülür; `GET /health` yanıtındaki
+`model_version` canlıdaki sürümü gösterir. Eğitim ve terfi için bkz. `training/README.md`.
 `app.state.model`, `classifier`, `explainer` ve `service` bellekte tutulur.
 Model yüklenemiyorsa uygulama başlangıcı başarısız olur; mock sonuca geçilmez.
 

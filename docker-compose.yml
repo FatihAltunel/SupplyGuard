@@ -175,6 +175,8 @@ services:
         condition: service_healthy
     environment:
       MLFLOW_TRACKING_URI: http://mlflow:5000
+      # Varsayılan @champion. Challenger'ı denemek için .env içinde MLFLOW_MODEL_URI verin.
+      MLFLOW_MODEL_URI: "${MLFLOW_MODEL_URI:-models:/SupplyGuard_JIT_Model@champion}"
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_PORT: "5672"
       RABBITMQ_USER: "${RABBITMQ_USER:-supplyguard}"

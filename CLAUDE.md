@@ -11,7 +11,7 @@ SupplyGuard bir tedarikçi risk tahmin sistemidir. .NET 8 Web API kullanıcıdan
 | `migrations` | EF Core migration bundle'ı. Tek seferlik çalışır; başarılı bitmeden api ve worker başlamaz. |
 | `web` (`supplyguard-ui`) | Vue 3 + Vite build'i, Nginx ile statik sunulur. Tek public giriş noktasıdır (`${WEB_PORT:-80}`); `/api/` isteklerini `api:8080`'e proxy'ler. |
 | `ml-worker` (`supplyguard-ml-worker`) | FastAPI + aio-pika. Modeli yükler, `supplyguard.risk.requests` kuyruğunu tüketir, `supplyguard.risk.responses` kuyruğuna yanıt yazar. `GET /health` (:8000). |
-| `mlflow` | Model Registry; backend SQLite (`./mlruns`). Model: `models:/SupplyGuard_JIT_Model/latest`. |
+| `mlflow` | Model Registry; backend SQLite (`./mlruns`). Worker `MLFLOW_MODEL_URI` yükler, varsayılan `models:/SupplyGuard_JIT_Model@champion`. Alias'ları yalnızca `training/promote.py` taşır. |
 | `postgres` / `rabbitmq` / `redis` | Kalıcı veri / mesajlaşma (vhost `supplyguard`) / cache. |
 
 **Uçtan uca akış (güncel JIT):**
@@ -91,6 +91,12 @@ dotnet ef database update --project src/SupplyGuard.Infrastructure --startup-pro
 
 # Modeli MLflow'a kaydetme (gitignore'daki lgbm_jit_v1.0.joblib gerekir; DOĞRULANMADI)
 .\.venv\Scripts\python.exe supplyguard-ml-worker/register_model.py
+.\.venv\Scripts\python.exe supplyguard-ml-worker/training/promote.py --bootstrap 1   # v1 -> @champion
+
+# Yeni model sürümü: eğit -> @challenger, kıyasla -> @champion (ayrıntı: supplyguard-ml-worker/training/README.md)
+.\.venv\Scripts\python.exe supplyguard-ml-worker/training/train.py
+.\.venv\Scripts\python.exe supplyguard-ml-worker/training/promote.py
+docker compose restart ml-worker
 ```
 
 ## 5. Servisler arası sözleşmeler — iki taraf birlikte güncellenmeli
