@@ -1,6 +1,7 @@
 using FluentValidation;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using SupplyGuard.Application.Common.Caching;
 using SupplyGuard.Application.Common.CQRS;
@@ -13,6 +14,7 @@ using SupplyGuard.Application.Features.RiskManagement.AcknowledgeEarlyWarning;
 using SupplyGuard.Application.Features.RiskManagement.EvaluateSupplierRisk;
 using SupplyGuard.Application.Features.RiskManagement.Events;
 using SupplyGuard.Application.Features.RiskManagement.GetActiveEarlyWarnings;
+using SupplyGuard.Application.Features.RiskManagement.GetRiskAnalysis;
 using SupplyGuard.Application.Features.RiskManagement.GetSupplierCurrentRisk;
 using SupplyGuard.Application.Features.RiskManagement.RequestRiskAnalysis;
 using SupplyGuard.Application.Features.RiskManagement.ProcessRiskAnalysisCompleted;
@@ -35,6 +37,8 @@ public static class DependencyInjection
         services.AddScoped<IValidator<SupplierRiskFeatures>, SupplierRiskFeaturesValidator>();
         services.AddScoped<IValidator<RequestJitRiskAnalysisCommand>, RequestJitRiskAnalysisCommandValidator>();
         services.AddValidatedCommandHandler<RequestJitRiskAnalysisCommand, RequestJitRiskAnalysisResult, RequestJitRiskAnalysisCommandHandler>();
+        services.TryAddSingleton(JitFeatureOverridePolicy.Disabled);
+        services.AddScoped<IQueryHandler<GetRiskAnalysisQuery, RiskAnalysisStatusDto?>, GetRiskAnalysisQueryHandler>();
         return services;
     }
 

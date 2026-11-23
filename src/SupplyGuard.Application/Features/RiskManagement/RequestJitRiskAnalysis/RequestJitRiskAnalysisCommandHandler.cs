@@ -19,36 +19,42 @@ public sealed class RequestJitRiskAnalysisCommandHandler(
     TimeProvider timeProvider,
     IXAIAuditLogRepository audits,
     IRiskAnalysisRepository analysisRepository,
-    IIntegrationMessageSerializer serializer) : ICommandHandler<RequestJitRiskAnalysisCommand, RequestJitRiskAnalysisResult>
+    IIntegrationMessageSerializer serializer,
+    JitFeatureOverridePolicy? overridePolicy = null) : ICommandHandler<RequestJitRiskAnalysisCommand, RequestJitRiskAnalysisResult>
 {
     public async Task<Result<RequestJitRiskAnalysisResult>> HandleAsync(
         RequestJitRiskAnalysisCommand command, CancellationToken cancellationToken = default)
     {
+        var overrides = command.Overrides is { IsEmpty: false } value ? value : null;
+        if (overrides is not null && overridePolicy?.Enabled != true)
+            return Failure("RiskAnalysis.OverridesNotAllowed", "Feature overrides are only accepted in demo mode.");
+
         var supplier = await supplierRepository.GetByIdAsync(command.SupplierId, cancellationToken);
         if (supplier is null || supplier.IsDeleted)
             return Failure("Supplier.NotFound", "The supplier was not found.");
 
         // Resolve external data before opening the database transaction. Do not silently
         // replace unavailable observations with zero or a fabricated healthy score.
-        decimal? trend;
-        decimal stability;
+        decimal? trend = overrides?.DeliveryDelayTrendPercentage;
+        decimal? stability = overrides?.FinancialStabilityScore;
         try
         {
-            trend = await performanceService.GetDeliveryDelayTrendAsync(
+            trend ??= await performanceService.GetDeliveryDelayTrendAsync(
                 supplier.Id, TimeSpan.FromDays(30), cancellationToken);
             if (trend is null)
                 return Failure("RiskAnalysis.TrendUnavailable", "The delivery-delay trend cannot be calculated.");
-            stability = await financialService.GetStabilityScoreAsync(supplier.Id, cancellationToken);
+            stability ??= await financialService.GetStabilityScoreAsync(supplier.Id, cancellationToken);
         }
         catch (SupplierIntegrationUnavailableException)
         {
             return Failure("RiskAnalysis.IntegrationsUnavailable", "Supplier performance or financial data is currently unavailable.");
         }
         // Await EF operations sequentially: the scoped DbContext is not thread safe.
-        var activeCount = await riskIndicators.CountActiveAsync(supplier.Id, cancellationToken);
+        var activeCount = overrides?.ActiveRiskIndicatorsCount
+            ?? await riskIndicators.CountActiveAsync(supplier.Id, cancellationToken);
         var features = new SupplierRiskFeatures(
             command.AverageDeliveryDelayDays, command.OnTimeDeliveryRate, command.QualityDefectRate,
-            trend.Value, stability, activeCount);
+            trend.Value, stability.Value, activeCount);
         if (!(await featuresValidator.ValidateAsync(features, cancellationToken)).IsValid)
             return Failure("RiskAnalysis.InvalidFeatures", "An integration returned an invalid feature value.");
 
