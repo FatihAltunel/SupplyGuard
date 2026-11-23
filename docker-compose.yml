@@ -123,6 +123,19 @@ services:
     ports:
       - "127.0.0.1:${API_PORT:-8080}:8080"
 
+  web:
+    build:
+      context: ./supplyguard-ui
+      dockerfile: Dockerfile
+    container_name: supplyguard-web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+    ports:
+      # Public entry point (UI + /api proxy). Override the host port with WEB_PORT.
+      - "${WEB_PORT:-80}:80"
+
   background-worker:
     build:
       context: .
