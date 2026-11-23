@@ -63,6 +63,7 @@ public sealed class JitRiskAnalysisTests
         services.AddScoped<IUnitOfWork, EfUnitOfWork>();
         services.AddScoped<IOutboxWriter, OutboxWriter>();
         services.AddSingleton<IIntegrationMessageSerializer, IntegrationMessageSerializer>();
+        services.AddSingleton<IRiskAnalysisResponseSerializer, RiskAnalysisResponseSerializer>();
         services.AddSingleton<TimeProvider>(new FixedTimeProvider(Now));
         await using var provider = services.BuildServiceProvider(new ServiceProviderOptions
         {

@@ -8,8 +8,20 @@ namespace SupplyGuard.Application.Features.RiskManagement.GetRiskAnalysis;
 
 public sealed class GetRiskAnalysisQueryHandler(
     IXAIAuditLogRepository audits,
-    IIntegrationMessageSerializer serializer) : IQueryHandler<GetRiskAnalysisQuery, RiskAnalysisStatusDto?>
+    IIntegrationMessageSerializer serializer,
+    IRiskAnalysisResponseSerializer responseSerializer) : IQueryHandler<GetRiskAnalysisQuery, RiskAnalysisStatusDto?>
 {
+    // Worker wire names (supplyguard-ml-worker/schemas.py FEATURE_NAMES) -> the API's camelCase feature keys.
+    private static readonly IReadOnlyDictionary<string, string> FeatureKeys = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["averageDeliveryDelayDays"] = "averageDeliveryDelayDays",
+        ["onTimeDeliveryRate"] = "onTimeDeliveryRate",
+        ["qualityDefectRate"] = "qualityDefectRate",
+        ["DeliveryDelayTrend_Percentage"] = "deliveryDelayTrendPercentage",
+        ["FinancialStabilityScore"] = "financialStabilityScore",
+        ["ActiveRiskIndicatorsCount"] = "activeRiskIndicatorsCount"
+    };
+
     public async Task<RiskAnalysisStatusDto?> HandleAsync(GetRiskAnalysisQuery query, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(query.CorrelationId) || query.CorrelationId.Length > 128) return null;
@@ -29,7 +41,8 @@ public sealed class GetRiskAnalysisQueryHandler(
             failed ? audit.FailureMessage : null,
             audit.RequestedAtUtc,
             audit.CompletedAtUtc,
-            ReadFeatures(audit.RequestPayload));
+            ReadFeatures(audit.RequestPayload),
+            completed ? ReadExplanation(audit.ResponsePayload) : null);
     }
 
     private RiskAnalysisFeaturesDto? ReadFeatures(string requestPayload)
@@ -44,6 +57,25 @@ public sealed class GetRiskAnalysisQueryHandler(
         catch (JsonException)
         {
             // Legacy v1 audits retain a different request contract; their inputs are not exposed here.
+            return null;
+        }
+    }
+
+    private RiskAnalysisExplanationDto? ReadExplanation(string? responsePayload)
+    {
+        if (responsePayload is null) return null;
+        try
+        {
+            var response = responseSerializer.Deserialize(responsePayload);
+            if (response.BaseValue is not { } baseValue || response.Contributions is null) return null;
+            return new RiskAnalysisExplanationDto(baseValue, response.Contributions
+                .Select(item => new RiskAnalysisContributionDto(
+                    FeatureKeys.TryGetValue(item.Feature, out var key) ? key : item.Feature, item.Contribution))
+                .ToArray());
+        }
+        catch (JsonException)
+        {
+            // Legacy v1 completions and older worker responses carry no SHAP decomposition.
             return null;
         }
     }

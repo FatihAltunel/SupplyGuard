@@ -178,6 +178,49 @@ public sealed class JitRiskAnalysisEndpointTests
     }
 
     [Fact]
+    public async Task Get_CompletedAnalysis_ExposesShapDecompositionWithApiFeatureKeys()
+    {
+        await using var api = await Api.CreateAsync();
+        (await api.PostAsync(Body("poll-shap"))).Dispose();
+        var response = new RiskAnalysisResponse("poll-shap", api.SupplierId, .97m, "Tedarikçide risk tespit edilmiştir.", true,
+            BaseValue: -1.25m, Contributions:
+            [
+                new("averageDeliveryDelayDays", 1.5m),
+                new("onTimeDeliveryRate", -.25m),
+                new("qualityDefectRate", 2m),
+                new("DeliveryDelayTrend_Percentage", 1.1m),
+                new("FinancialStabilityScore", -.4m),
+                new("ActiveRiskIndicatorsCount", .3m)
+            ]);
+        await using (var context = api.Store.Context())
+        {
+            var audit = await context.XAIAuditLogs.SingleAsync();
+            audit.Complete(response.ConfidenceScore, response.ExplanationText,
+                new RiskAnalysisResponseSerializer().Serialize(response), DateTimeOffset.UtcNow);
+            await context.SaveChangesAsync();
+        }
+
+        using var completed = await api.GetAsync("poll-shap");
+        using var json = JsonDocument.Parse(await completed.Content.ReadAsStringAsync());
+        var explanation = json.RootElement.GetProperty("explanation");
+        Assert.Equal(-1.25m, explanation.GetProperty("baseValue").GetDecimal());
+        var contributions = explanation.GetProperty("contributions").EnumerateArray()
+            .Select(item => (item.GetProperty("feature").GetString(), item.GetProperty("contribution").GetDecimal())).ToArray();
+        Assert.Equal(
+        [
+            ("averageDeliveryDelayDays", 1.5m),
+            ("onTimeDeliveryRate", -.25m),
+            ("qualityDefectRate", 2m),
+            ("deliveryDelayTrendPercentage", 1.1m),
+            ("financialStabilityScore", -.4m),
+            ("activeRiskIndicatorsCount", .3m)
+        ], contributions);
+        // Every contribution key matches a key of the "features" object, so clients can join them.
+        var featureKeys = json.RootElement.GetProperty("features").EnumerateObject().Select(property => property.Name).ToHashSet();
+        Assert.All(contributions, item => Assert.Contains(item.Item1!, featureKeys));
+    }
+
+    [Fact]
     public async Task Get_FailedAnalysis_ExposesFailureMessageWithoutScore()
     {
         await using var api = await Api.CreateAsync();
@@ -194,6 +237,7 @@ public sealed class JitRiskAnalysisEndpointTests
         Assert.Equal("Failed", json.RootElement.GetProperty("status").GetString());
         Assert.Equal("Risk analizi tamamlanamadı.", json.RootElement.GetProperty("failureMessage").GetString());
         Assert.Equal(JsonValueKind.Null, json.RootElement.GetProperty("confidenceScore").ValueKind);
+        Assert.Equal(JsonValueKind.Null, json.RootElement.GetProperty("explanation").ValueKind);
     }
 
     [Fact]
@@ -333,6 +377,7 @@ public sealed class JitRiskAnalysisEndpointTests
             builder.Services.AddScoped<IUnitOfWork, EfUnitOfWork>();
             builder.Services.AddScoped<IOutboxWriter, OutboxWriter>();
             builder.Services.AddSingleton<IIntegrationMessageSerializer, IntegrationMessageSerializer>();
+            builder.Services.AddSingleton<IRiskAnalysisResponseSerializer, RiskAnalysisResponseSerializer>();
             if (simulated) builder.Services.AddSimulatedSupplierIntegrations();
             else
             {

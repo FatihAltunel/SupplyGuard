@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import shap
 
-from schemas import FEATURE_NAMES, RiskAnalysisRequest, RiskAnalysisResponse
+from schemas import FEATURE_NAMES, FeatureContribution, RiskAnalysisRequest, RiskAnalysisResponse
 
 MODEL_URI = "models:/SupplyGuard_JIT_Model/latest"
 FEATURE_LABELS = {
@@ -54,6 +54,21 @@ def risk_shap_values(raw: Any, risk_index: int) -> np.ndarray:
         raise ValueError("Unexpected or non-finite SHAP output.")
     # LightGBM's single raw output describes classes_[1].
     return -values[0] if single_output and risk_index == 0 else values[0]
+
+
+def risk_base_value(expected: Any, risk_index: int) -> float:
+    """Normalize TreeExplainer.expected_value to the risk class, matching risk_shap_values."""
+    values = np.asarray(expected, dtype=float).reshape(-1)
+    if values.size == 2:
+        base = values[risk_index]
+    elif values.size == 1:
+        # LightGBM's single raw output describes classes_[1].
+        base = -values[0] if risk_index == 0 else values[0]
+    else:
+        raise ValueError("SHAP must describe a binary classifier.")
+    if not np.isfinite(base):
+        raise ValueError("Non-finite SHAP base value.")
+    return float(base)
 
 
 class RiskAnalysisService:
@@ -129,4 +144,9 @@ class RiskAnalysisService:
         return RiskAnalysisResponse(
             CorrelationId=request.CorrelationId, SupplierId=request.SupplierId,
             ConfidenceScore=confidence, ExplanationText=explanation, IsSuccessful=True,
+            BaseValue=round(risk_base_value(self.explainer.expected_value, self.risk_index), 6),
+            Contributions=[
+                FeatureContribution(Feature=name, Contribution=round(float(value), 6))
+                for name, value in zip(FEATURE_NAMES, contributions)
+            ],
         )

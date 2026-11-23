@@ -38,6 +38,25 @@ public sealed class RiskAnalysisResponseValidator : AbstractValidator<RiskAnalys
             RuleFor(x => x.ErrorMessage).NotEmpty();
             RuleFor(x => x.ConfidenceScore).Equal(0);
             RuleFor(x => x.ExplanationText).Equal(string.Empty);
+            RuleFor(x => x.BaseValue).Null();
+            RuleFor(x => x.Contributions).Null();
         });
+        // The SHAP decomposition is all-or-nothing: a base value without contributions (or vice versa) is invalid.
+        RuleFor(x => x.BaseValue).NotNull().When(x => x.Contributions is not null);
+        RuleFor(x => x.Contributions).NotNull().When(x => x.BaseValue is not null);
+        RuleFor(x => x.Contributions!)
+            .Cascade(CascadeMode.Stop)
+            .Must(items => items.All(item => item is not null))
+            .WithMessage("Contributions cannot contain null items.")
+            .Must(items => items.Count is > 0 and <= 32)
+            .WithMessage("Contributions must contain between 1 and 32 features.")
+            .Must(items => items.Select(item => item.Feature).Distinct(StringComparer.Ordinal).Count() == items.Count)
+            .WithMessage("Contribution features must be unique.")
+            .When(x => x.Contributions is not null);
+        RuleForEach(x => x.Contributions).ChildRules(item =>
+        {
+            item.RuleFor(contribution => contribution.Feature).NotEmpty().MaximumLength(100)
+                .Must(feature => feature is not null && feature == feature.Trim());
+        }).When(x => x.Contributions is not null && x.Contributions.All(item => item is not null));
     }
 }
