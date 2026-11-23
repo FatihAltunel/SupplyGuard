@@ -96,7 +96,11 @@ dotnet ef database update --project src/SupplyGuard.Infrastructure --startup-pro
 ## 5. Servisler arası sözleşmeler — iki taraf birlikte güncellenmeli
 - **JIT istek/yanıt (güncel):** `supplyguard-ml-worker/schemas.py` ⇄ `src/SupplyGuard.Application/Common/Messaging/RiskAnalysis/Worker/V1/` (`RiskAnalysisRequest.cs`, `RiskAnalysisResponse.cs`, `RiskAnalysisValidators.cs`). Alan adları birebir ve büyük/küçük harf duyarlı (`CorrelationId`, `averageDeliveryDelayDays`, `DeliveryDelayTrend_Percentage` …). İki taraf da bilinmeyen alanı reddeder.
 - **Feature sırası:** `schemas.py` içindeki `FEATURE_NAMES` ile modelin `feature_name_` alanı başlangıçta karşılaştırılır.
-- **SHAP/açıklama formatı:** `supplyguard-ml-worker/services.py` (`FEATURE_LABELS`, `format_feature`, `risk_shap_values`, `_analyze`). Çıktı yalnızca `ExplanationText` (Türkçe metin) olarak taşınır; sayısal katkılar taşınmaz.
+- **SHAP/açıklama formatı:** `supplyguard-ml-worker/services.py` (`FEATURE_LABELS`, `format_feature`, `risk_shap_values`, `risk_base_value`, `_analyze`). Başarılı yanıt iki şey taşır:
+  - `ExplanationText` (Türkçe metin).
+  - Sayısal SHAP ayrıştırması: `BaseValue` ve `Contributions[{Feature, Contribution}]`, log-odds biriminde. `BaseValue + Σ Contribution` = risk sınıfının ham skoru.
+  - Bu alanlar opsiyoneldir ve yalnızca başarılı yanıtta bulunur. .NET tarafı (`RiskAnalysisResponse.cs`, `RiskAnalysisValidators.cs`) bunları kabul etmeden önce worker güncellenirse yanıtlar karantinaya düşer; deploy sırası: önce `background-worker`, sonra `ml-worker`.
+  - Durum endpoint'i bunları `explanation` alanında, `features` ile aynı camelCase anahtarlarla döner. UI tarafı: `supplyguard-ui/src/lib/explanation.ts`.
 - **Kuyruk adları/topoloji:** `RabbitMqTopology.cs`, `RabbitMqOptions.cs`, `appsettings.json` (API ve BackgroundWorker), `config.py`, `docker-compose.yml`. Declaration argümanları iki tarafta aynı olmalı.
 - **HTTP (UI ⇄ API):** `supplyguard-ui/src/api/types.ts` ⇄ `SupplierRiskAnalysesController.cs` (`RequestSupplierRiskAnalysis`) ve `GetRiskAnalysisQuery.cs` (`RiskAnalysisStatusDto`).
 - **Eski v1 envelope:** `Application/Common/Messaging/RiskAnalysis/V1/` ⇄ `contracts.py`.

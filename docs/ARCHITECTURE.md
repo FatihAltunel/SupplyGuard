@@ -163,8 +163,14 @@ Kaynak: `supplyguard-ml-worker/schemas.py` ⇄ `src/SupplyGuard.Application/Comm
 | `ExplanationText` | başarılıysa boş olamaz; başarısızsa `""` |
 | `IsSuccessful` | bool |
 | `ErrorMessage` | başarılıysa `null`, başarısızsa zorunlu (≤2000) |
+| `BaseValue` | opsiyonel; yalnızca başarılıysa. SHAP başlangıç değeri (log-odds) |
+| `Contributions` | opsiyonel; yalnızca başarılıysa, `BaseValue` ile birlikte. `[{Feature, Contribution}]` (1–32 benzersiz özellik, log-odds). `BaseValue + Σ Contribution` = ham risk skoru |
 
-Model adı, sürümü, gecikme ve sayısal SHAP katkıları yanıtta **yer almaz**.
+Model adı, sürümü ve gecikme yanıtta **yer almaz**.
+
+Sayısal SHAP alanları sonradan eklendi; eski worker'ların yanıtları (alanlar yok) hâlâ geçerlidir. Yeni worker'ın yanıtlarını eski .NET consumer reddeder (bilinmeyen alan). Deploy sırası bu yüzden önemlidir: önce `background-worker`, sonra `ml-worker`.
+
+Durum endpoint'i bu ayrıştırmayı `explanation: {baseValue, contributions[{feature, contribution}]}` olarak döner. `feature` anahtarları `features` nesnesiyle aynıdır. UI bunu "Neden bu sonuç?" grafiğinde ve "Model arka planda ne yaptı?" bölümünde gösterir.
 
 **Eski v1 envelope** (`RiskAnalysisRequestedEvent` / `RiskAnalysisCompletedEvent`): `messageId`, `messageType`, `correlationId` (UUID), `occurredAtUtc` (ms + `Z`), `supplierId`, `input{featureSchemaVersion=1, observedAtUtc, features{}}`; completion'da `model{name,version,isMock}`, `execution{...,latencyMs}`, `result{riskScore 0–100, confidenceScore, explanation{method:"dummy-shap", baseValue, contributions[]}}` veya `error{code,message}`. Python karşılığı `contracts.py`'de, ancak çalışan worker'a bağlı değil.
 
@@ -230,7 +236,7 @@ Bu inceleme sırasında çalıştırıldı (2026-11-23, yerel):
 ### Model / MLflow
 5. **Model tekrar üretilemez.** Eğitim kodu repoda yok; `lgbm_jit_v1.0.joblib` ve `mlruns/` `.gitignore`'da. Temiz klonda `register_model.py` çalıştırılamaz → ml-worker başlangıçta model yükleyemez ve `restart: unless-stopped` ile döngüye girer.
 6. **`latest` sürümüne bağlılık.** Worker sürüm sabitlemiyor ve kullanılan sürümü yanıtta bildirmiyor; audit'te `ModelVersion = "unreported"`, `LatencyMs = 0`. Hangi sonucun hangi modelden geldiği izlenemiyor.
-7. **SHAP katkıları kalıcı değil.** Yalnızca Türkçe metin saklanıyor; sayısal katkılar ve base value kayboluyor. Katkılar log-odds ölçeğinde (README de uyarıyor).
+7. ~~**SHAP katkıları kalıcı değil.**~~ Sayısal katkılar ve base value artık yanıtta taşınıyor ve `ResponsePayload` içinde saklanıyor (§3.3). Katkılar log-odds ölçeğinde. Model kalibre olmadığı için yüzde skor uçlarda kalıyor; göreli katkılar daha bilgilendirici.
 8. **`ConfidenceScore` adlandırması yanıltıcı.** Değer P(risk=1) olasılığı, güven ölçüsü değil. Karar eşiği (ör. hangi olasılık "yüksek risk") tanımlı değil **[belirsiz]**.
 9. **MLflow altyapısı kırılgan.** Her açılışta `pip install` (ağ bağımlılığı, yavaş başlangıç), SQLite backend, healthcheck yok; ml-worker yalnızca `service_started` bekliyor. Port 5000 tüm arayüzlere açık, kimlik doğrulama yok.
 10. `scikit-learn==1.6.1` eğitim sürümüne sabitli, Python imajı 3.13, MLflow imajı 3.10: sürüm uyumu yalnızca yerelde doğrulanmış görünüyor.
