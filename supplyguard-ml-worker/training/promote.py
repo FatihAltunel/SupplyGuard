@@ -1,11 +1,15 @@
 """@challenger sürümünü @champion ile aynı referans veride kıyaslar; kapılar geçerse terfi ettirir.
 
-Kullanım (depo kökünden):
-    python supplyguard-ml-worker/training/promote.py --status          # hangi alias hangi sürümde
-    python supplyguard-ml-worker/training/promote.py --bootstrap 1     # ilk kurulum: v1'i champion yap
-    python supplyguard-ml-worker/training/promote.py --dry-run         # kıyasla, alias'a dokunma
-    python supplyguard-ml-worker/training/promote.py                   # kıyasla, geçerse terfi et
-    python supplyguard-ml-worker/training/promote.py --rollback        # champion -> previous_champion
+Kullanım (depo kökünden, ml-worker imajının içinde; kısayol için bkz. training/README.md):
+    docker compose run --rm --no-deps -v "${PWD}/supplyguard-ml-worker:/work:ro" -w /work \\
+        ml-worker python training/promote.py --tracking-uri http://mlflow:5000 [SEÇENEK]
+
+Seçenekler:
+    --status          # hangi alias hangi sürümde
+    --bootstrap 1     # ilk kurulum: v1'i champion yap
+    --dry-run         # kıyasla, alias'a dokunma
+    (yok)             # kıyasla, geçerse terfi et
+    --rollback        # champion -> previous_champion
 
 Worker modeli yalnızca başlangıçta yükler. Alias değişince:
     docker compose restart ml-worker

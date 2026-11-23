@@ -1,10 +1,13 @@
 """SupplyGuard JIT modelini eğitir, MLflow'a loglar ve 'challenger' olarak kaydeder.
 
-Kullanım (depo kökünden, worker ile AYNI sanal ortamda; sklearn/lightgbm sürümleri
-worker'daki sabit sürümlerle aynı olmalı, yoksa model yüklenirken uyumsuzluk çıkar):
+Kullanım (depo kökünden, ml-worker imajının İÇİNDE; böylece sklearn/lightgbm/mlflow
+sürümleri modeli yükleyecek worker ile birebir aynı olur):
 
-    .\\.venv\\Scripts\\python.exe supplyguard-ml-worker/training/train.py
-    .\\.venv\\Scripts\\python.exe supplyguard-ml-worker/training/train.py --no-register   # sadece deney
+    docker compose run --rm --no-deps -v "${PWD}/supplyguard-ml-worker:/work:ro" -w /work \\
+        ml-worker python training/train.py --tracking-uri http://mlflow:5000
+    # ... training/train.py --tracking-uri http://mlflow:5000 --no-register   # sadece deney
+
+Ayrıntı ve PowerShell kısayolu (Invoke-Training): training/README.md
 
 Akış:
     veri üret -> train/valid/holdout böl -> LightGBM (monoton + early stopping)
@@ -186,7 +189,7 @@ def main() -> int:
         if report.passed:
             client.set_registered_model_alias(MODEL_NAME, CHALLENGER_ALIAS, version)
             print(f"\n{MODEL_NAME} v{version} kapıları GEÇTİ -> @{CHALLENGER_ALIAS}")
-            print("Sıradaki adım: python supplyguard-ml-worker/training/promote.py")
+            print("Sıradaki adım: training/promote.py (ml-worker imajında; bkz. training/README.md)")
             return 0
         print(f"\n{MODEL_NAME} v{version} kapılardan KALDI; alias verilmedi:")
         for failure in report.failures:
