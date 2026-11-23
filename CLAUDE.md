@@ -9,6 +9,7 @@ SupplyGuard bir tedarikçi risk tahmin sistemidir. .NET 8 Web API kullanıcıdan
 | `api` (`src/SupplyGuard.WebAPI`) | JWT auth, REST, CQRS. JIT isteğini tek transaction'da Pending audit + `outbox_messages` olarak kaydeder, `202` döner. Compose'da arka plan servisleri kapalı (`Messaging__RunBackgroundServices=false`). |
 | `background-worker` (`src/SupplyGuard.BackgroundWorker`) | HTTP yok. Outbox → RabbitMQ yayını, yanıt consumer'ı, eski v1 consumer'ı, bildirim consumer'ı. |
 | `migrations` | EF Core migration bundle'ı. Tek seferlik çalışır; başarılı bitmeden api ve worker başlamaz. |
+| `web` (`supplyguard-ui`) | Vue 3 + Vite build'i, Nginx ile statik sunulur. Tek public giriş noktasıdır (`${WEB_PORT:-80}`); `/api/` isteklerini `api:8080`'e proxy'ler. |
 | `ml-worker` (`supplyguard-ml-worker`) | FastAPI + aio-pika. Modeli yükler, `supplyguard.risk.requests` kuyruğunu tüketir, `supplyguard.risk.responses` kuyruğuna yanıt yazar. `GET /health` (:8000). |
 | `mlflow` | Model Registry; backend SQLite (`./mlruns`). Model: `models:/SupplyGuard_JIT_Model/latest`. |
 | `postgres` / `rabbitmq` / `redis` | Kalıcı veri / mesajlaşma (vhost `supplyguard`) / cache. |
@@ -20,11 +21,24 @@ SupplyGuard bir tedarikçi risk tahmin sistemidir. .NET 8 Web API kullanıcıdan
 4. `OutboxDispatcher` satırı `FOR UPDATE SKIP LOCKED` ile alır ve default exchange'e yayınlar (publisher confirm, mandatory).
 5. ml-worker `predict_proba` çalıştırır; `ConfidenceScore` = P(risk=1). SHAP `TreeExplainer` en etkili 2 pozitif ve 1 negatif faktörden Türkçe metin üretir. Yanıt confirm edildikten sonra istek ACK edilir.
 6. `RiskAnalysisResponseConsumer` audit'i `FOR UPDATE` ile kilitler ve `Complete()`/`Fail()` çağırır. ACK commit'ten sonra gelir; bozuk yanıtlar `supplyguard.risk.responses.error` kuyruğuna gider.
-7. **Kullanıcıya dönüş: DOĞRULANMADI / mevcut değil.** Sonucu okuyan bir endpoint, polling veya SignalR yok. JIT sonucu `RiskAssessment`/`EarlyWarning` üretmez.
+7. **Kullanıcıya dönüş (HTTP polling):** Vue UI (`web` servisi), `GET /api/suppliers/{id}/risk-analyses/{correlationId}` adresini ~1.5 sn'de bir sorgular ve `Completed` veya `Failed` gelince durur. SignalR kullanılmaz. JIT sonucu `RiskAssessment`/`EarlyWarning` üretmez.
+
+**Demo modu** (`DemoMode:Enabled=true`; ortamdan bağımsız, AWS'de Production'da da açılabilir; compose'da `DEMO_MODE`, varsayılan `true`):
+- Simüle entegrasyonlar devreye girer: trend `%15`, finansal skor `85`.
+- POST gövdesi `deliveryDelayTrendPercentage`, `financialStabilityScore` ve `activeRiskIndicatorsCount` override alanlarını kabul eder (`JitFeatureOverridePolicy`). Demo modu dışında bu alanlarla gelen istek `400` alır.
+- Açılışta `DemoSupplierSeeder` 3 örnek tedarikçi, `DemoUserSeeder` ise parolasız `demo` hesabını ve `DemoUser` rolünü oluşturur. Bu rolün yetkileri: `suppliers.read`, `risk-assessments.read` ve `risk-assessments.create`.
+- UI'daki "Demo olarak kullan" butonu `POST /api/auth/demo` çağırır. Endpoint demo modu kapalıysa `404` döner.
+- Eski `JitRiskAnalysis:UseSimulatedIntegrations` ayarı kaldırıldı; tanımlıysa API başlarken hata verir.
+- Gerçek tedarikçi verisiyle asla açma.
+
+**Rate limiting:** .NET'in yerleşik `AddRateLimiter`'ı kullanılır (`src/SupplyGuard.WebAPI/RateLimiting/`).
+- İstemci IP'si başına, dakikalık pencereler: analiz POST, durum GET ve login/refresh/demo girişi için ayrı limitler (`appsettings.json` → `RateLimiting`).
+- Limit aşılınca `429` ve `Retry-After` döner.
+- `ReverseProxy:TrustForwardedHeaders=true` ise Nginx'in `X-Forwarded-For` başlığı okunur. Compose'da açıktır; API portu yalnızca loopback'e açık kalmalıdır.
 
 Eski v1 akışı (`POST /api/suppliers/{id}/analyze`, `risk-analysis.*.queue`) hâlâ kayıtlı. Ancak güncel Python worker bu kuyrukları dinlemiyor.
 
-**Redis'in rolü: yalnızca cache.** Durum veya rate limit için kullanılmıyor.
+**Redis'in rolü: yalnızca cache.** Durum veya rate limit için kullanılmıyor; rate limit sayaçları API process'inin belleğinde tutulur.
 - `GetSupplierByIdQuery` cache-aside ile önbelleğe alınır: anahtar `supplyguard:supplier:v1:{id:N}`, TTL 10 dk.
 - Supplier update, status değişikliği, evaluate ve eski v1 completion komutları bu anahtarı siler.
 - Fail-open: Redis hataları loglanır ve yutulur.
@@ -36,6 +50,12 @@ Eski v1 akışı (`POST /api/suppliers/{id}/analyze`, `risk-analysis.*.queue`) h
 - `src/SupplyGuard.WebAPI`: controller'lar, auth policy'leri, `Program.cs`.
 - `src/SupplyGuard.BackgroundWorker`: Generic Host.
 - `supplyguard-ml-worker/`: `main.py` (FastAPI lifespan), `rabbitmq.py`, `services.py` (model + SHAP), `schemas.py` (sözleşme), `config.py`, `register_model.py`, `tests/`. `contracts.py` ve `inference.py` eski Phase A kodudur; kullanılmaz ve imaja kopyalanmaz.
+- `supplyguard-ui/`: Vue 3 + TypeScript demo arayüzü.
+  - `src/api/`: fetch istemcisi, 401/429 eşlemesi, `types.ts`. Bu dosya API JSON'unun aynısıdır.
+  - `src/lib/`: polling, form doğrulama, senaryolar, correlation id.
+  - `src/components/`: SVG gauge, girdi çubukları, form.
+  - `nginx.conf` ve `Dockerfile` (multi-stage: node → nginx).
+  - Paketler yalnızca `vue`, `vite`, `@vitejs/plugin-vue`, `typescript`, `vue-tsc`, `vitest`. Yeni paket onay gerektirir.
 - `tests/`: `SupplyGuard.Domain.Tests`, `SupplyGuard.Application.Tests`, `SupplyGuard.IntegrationTests` (xUnit, Moq, SQLite).
 - `docs/`: mimari ve akış dokümanları. `SPRINT8_PHASE_A_E2E.md` eski v1 akışını anlatır.
 - `.claude/commands/precommit.md`: commit öncesi kontrol komutu (`/precommit`).
@@ -53,6 +73,9 @@ dotnet test SupplyGuard.sln
 # Canlı testler (izole DB/broker gerekir; DOĞRULANMADI, çalıştırılmadı)
 # Env: SUPPLYGUARD_WORKER_TEST_POSTGRES, RabbitMq__*, SUPPLYGUARD_RUN_RABBITMQ_TESTS=1
 dotnet test tests/SupplyGuard.IntegrationTests --filter "FullyQualifiedName~WorkerRiskAnalysisLiveTests|FullyQualifiedName~RabbitMqLiveTests"
+
+# UI test + typecheck + build. Yerelde Node yok; node:22-alpine container'ında doğrulandı (20 Vitest testi geçti).
+docker run --rm -v "${PWD}/supplyguard-ui:/app" -w /app node:22-alpine sh -c "npm ci && npm test && npm run build"
 
 # Python test (doğrulandı: 23 geçti). pytest kurulu değil.
 cd supplyguard-ml-worker; ..\.venv\Scripts\python.exe -m unittest discover -s tests -v
@@ -75,6 +98,7 @@ dotnet ef database update --project src/SupplyGuard.Infrastructure --startup-pro
 - **Feature sırası:** `schemas.py` içindeki `FEATURE_NAMES` ile modelin `feature_name_` alanı başlangıçta karşılaştırılır.
 - **SHAP/açıklama formatı:** `supplyguard-ml-worker/services.py` (`FEATURE_LABELS`, `format_feature`, `risk_shap_values`, `_analyze`). Çıktı yalnızca `ExplanationText` (Türkçe metin) olarak taşınır; sayısal katkılar taşınmaz.
 - **Kuyruk adları/topoloji:** `RabbitMqTopology.cs`, `RabbitMqOptions.cs`, `appsettings.json` (API ve BackgroundWorker), `config.py`, `docker-compose.yml`. Declaration argümanları iki tarafta aynı olmalı.
+- **HTTP (UI ⇄ API):** `supplyguard-ui/src/api/types.ts` ⇄ `SupplierRiskAnalysesController.cs` (`RequestSupplierRiskAnalysis`) ve `GetRiskAnalysisQuery.cs` (`RiskAnalysisStatusDto`).
 - **Eski v1 envelope:** `Application/Common/Messaging/RiskAnalysis/V1/` ⇄ `contracts.py`.
 - **DB:** `Infrastructure/Persistence/Configurations/*` ve `Migrations/`.
 

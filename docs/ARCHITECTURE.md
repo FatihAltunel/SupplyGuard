@@ -23,7 +23,7 @@
 
 .NET katmanları (Clean Architecture): `Domain` (bağımlılıksız entity/kurallar) → `Application` (CQRS handler'lar, validator'lar, mesaj sözleşmeleri, cache dekoratörleri) → `Infrastructure` (EF Core/Npgsql, RabbitMQ.Client, Identity/JWT, Outbox) → `WebAPI` / `BackgroundWorker` (host'lar).
 
-**Dış entegrasyonlar:** `ISupplierPerformanceService` (teslimat gecikme trendi) ve `IFinancialIntegrationService` (finansal istikrar skoru). Gerçek adaptör **yok**; varsayılan `UnavailableSupplierIntegrations` → endpoint `503` döner. Compose'da `JitRiskAnalysis__UseSimulatedIntegrations=true` ile simülasyon açılır ve yalnızca `Development` ortamında izin verilir.
+**Dış entegrasyonlar:** `ISupplierPerformanceService` (teslimat gecikme trendi) ve `IFinancialIntegrationService` (finansal istikrar skoru). Gerçek adaptör **yok**; varsayılan `UnavailableSupplierIntegrations` → endpoint `503` döner. Simülasyon `DemoMode:Enabled=true` ile açılır. Bu bayrak ortamdan bağımsızdır (Production'da da açılabilir); compose'da `DEMO_MODE` ile ayarlanır ve varsayılanı `true`'dur.
 
 ---
 
@@ -56,10 +56,20 @@ background-worker / RiskAnalysisResponseConsumer
           Pending ise Complete()/Fail(); terminal ise aynı yanıt=Duplicate, farklı=Conflict }
   → COMMIT sonrası ACK (DB hatasında oturum kapanır, mesaj yeniden teslim edilir)
 
-Kullanıcı ──?──▶ sonuç
+Kullanıcı (Vue UI) ──GET /api/suppliers/{id}/risk-analyses/{correlationId} (~1.5 sn polling)──▶ api
+  → GetRiskAnalysisQueryHandler: audit'i AsNoTracking okur (supplier eşleşmesi zorunlu)
+  ◀── {status: Pending|Completed|Failed, confidenceScore, explanationText, failureMessage, features{6}}
+  UI: Completed/Failed gelince polling durur; 429'da Retry-After kadar bekler; ~60 sn sonra zaman aşımı
 ```
 
-**"DB → kullanıcı" adımı eksik.** JIT sonucu yalnızca `xai_audit_logs` satırına yazılır (`ConfidenceScore`, `ExplanationText`, `ResponsePayload`, `ExplanationStatus`). Bu kaydı okuyan bir sorgu/endpoint, polling URL'i, SignalR/webhook **yok**; `docs/BACKGROUND_RISK_ANALYSIS.md` de "UI ve SignalR bu akışın parçası değildir" der. JIT akışı `RiskAssessment` veya `EarlyWarning` de üretmez; dolayısıyla `GET /api/risk-management/suppliers/{id}/current` JIT sonucunu yansıtmaz. Kullanıcının sonucu nasıl göreceği **[belirsiz]** (bugün yalnızca doğrudan SQL ile).
+**"DB → kullanıcı" adımı HTTP polling ile yapılır** (SignalR yok). Durum endpoint'i yalnızca okur ve cache kullanmaz. `features` alanı audit'teki `RequestPayload`'dan, yani worker'a gönderilen girdilerin aynısından okunur; eski v1 audit'lerde `null` döner. JIT akışı `RiskAssessment` veya `EarlyWarning` üretmez; dolayısıyla `GET /api/risk-management/suppliers/{id}/current` JIT sonucunu yansıtmaz.
+
+**Demo modu** (`DemoMode:Enabled=true`, ortamdan bağımsız; gerçek veriyle kullanılmaz):
+- Arayüzde giriş formu yoktur. "Demo olarak kullan" butonu `POST /api/auth/demo` ile paylaşılan, parolasız `demo` hesabına token alır.
+- Bu hesap `DemoUser` rolündedir ve yalnızca tedarikçi okuma, analiz isteme ve analiz okuma yetkisine sahiptir. `DemoUserSeeder` her açılışta fazladan rol, yetki ve parolayı geri alır.
+- POST gövdesindeki `deliveryDelayTrendPercentage`, `financialStabilityScore` ve `activeRiskIndicatorsCount` alanları entegrasyondan ve DB'den gelen değerlerin yerine geçer (`JitFeatureOverridePolicy`). Demo modu dışında bu alanlarla gelen istek `400 RiskAnalysis.OverridesNotAllowed` alır.
+- RabbitMQ'ya giden düz JSON sözleşmesi değişmez.
+- `DemoSupplierSeeder` 3 kurgusal tedarikçi ekler (vergi no `DEMO000000000x`).
 
 ### 2.1 Eski v1 akışı (`POST /api/suppliers/{id}/analyze`)
 
@@ -81,6 +91,7 @@ Ancak güncel Docker imajındaki Python worker bu kuyruğu **dinlemiyor**: `cont
 | Metot & yol | Yetki (policy) | Açıklama |
 |---|---|---|
 | `POST /api/auth/login` | anonim | Kullanıcı adı/e-posta + parola → access + refresh token |
+| `POST /api/auth/demo` | anonim | Yalnızca demo modunda: paylaşılan `demo` hesabına token (kapalıysa `404`). Rate limit: `authentication` |
 | `POST /api/auth/refresh` | anonim | Refresh token rotasyonu |
 | `POST /api/auth/logout` | JWT | Refresh token iptali |
 | `GET /api/suppliers?pageNumber&pageSize` | `SuppliersRead` | Sayfalı liste (cache yok) |
@@ -89,7 +100,8 @@ Ancak güncel Docker imajındaki Python worker bu kuyruğu **dinlemiyor**: `cont
 | `PUT /api/suppliers/{id}` | `SuppliersUpdate` | Güncelle (cache invalidation) |
 | `PATCH /api/suppliers/{id}/status` | `SuppliersChangeStatus` | Durum değiştir (cache invalidation) |
 | `POST /api/suppliers/{id}/analyze` | `RiskAssessmentsCreate` | **Eski v1** analiz isteği (§2.1) |
-| `POST /api/suppliers/{supplierId}/risk-analyses` | `RiskAssessmentsCreate` | **Güncel JIT** analiz isteği, `202`; `404/409/422/503` hata eşlemeleri |
+| `POST /api/suppliers/{supplierId}/risk-analyses` | `RiskAssessmentsCreate` | **Güncel JIT** analiz isteği, `202`; `400/404/409/422/429/503` hata eşlemeleri. Rate limit: `analysis-submit` |
+| `GET /api/suppliers/{supplierId}/risk-analyses/{correlationId}` | `RiskAssessmentsRead` | JIT durum/sonuç (polling); yoksa veya başka tedarikçiye aitse `404`. Rate limit: `analysis-status` |
 | `POST /api/risk-management/suppliers/{id}/evaluations` | `RiskAssessmentsCreate` | Kural tabanlı değerlendirme, `201` |
 | `GET /api/risk-management/suppliers/{id}/current` | `RiskAssessmentsRead` | Son `RiskAssessment` |
 | `GET /api/risk-management/warnings/active?supplierId` | `RiskAssessmentsRead` | Açık erken uyarılar |
@@ -185,7 +197,7 @@ Migration sırası: `InitialCreate` → `AddIdentitySchema` → `UpdateXAIAuditL
 - Invalidation: `CacheInvalidatingCommandHandlerDecorator` — `UpdateSupplier`, `ChangeSupplierStatus`, `EvaluateSupplierRisk`, (eski) `ProcessRiskAnalysisCompleted` başarılı olunca anahtarı siler.
 - **Fail-open:** okuma/yazma/silme hataları loglanır ve yutulur; `abortConnect=false`; Compose'da Redis sağlığı API'yi bloklamaz. Redis düşerse silinemeyen anahtar TTL'e kadar bayat kalabilir.
 - JIT yanıt handler'ı cache'e dokunmaz; `SupplierDetailsDto` JIT sonucunu içermediği için şu an bu bir tutarsızlık değil.
-- Rate limiting yok (`AddRateLimiter` vb. bulunmuyor). Python worker'ın idempotency için kullandığı bir Redis/cache de yok.
+- Rate limiting Redis'te değil, API process belleğinde tutulur (yerleşik `AddRateLimiter`, IP başına sabit dakikalık pencere). Birden fazla API instance'ı çalışırsa limitler instance başına uygulanır. Python worker'ın idempotency için kullandığı bir Redis/cache de yok.
 - Redis'te parola/ACL yok ve port `6379` tüm arayüzlere açık.
 
 ---
@@ -210,7 +222,7 @@ Bu inceleme sırasında çalıştırıldı (2026-11-23, yerel):
 ## 6. Eksikler, riskli ve belirsiz noktalar
 
 ### Fonksiyonel eksikler
-1. **Sonuç kullanıcıya ulaşmıyor.** JIT sonucunu okuyan endpoint/bildirim yok (§2). En kritik boşluk.
+1. ~~**Sonuç kullanıcıya ulaşmıyor.**~~ Durum endpoint'i ve polling yapan Vue UI ile kapatıldı (§2). Push bildirim (SignalR) bilinçli olarak yok.
 2. **Gerçek veri adaptörleri yok.** Trend ve finansal skor yalnızca Development'ta simüle; diğer ortamlarda endpoint daima `503`. Gerçek kaynakların ne olacağı **[belirsiz]**.
 3. **JIT sonucu domain'e yansımıyor.** `RiskAssessment`/`EarlyWarning` üretilmiyor; yüksek risk olasılığı uyarı tetiklemiyor. Kasıtlı mı **[belirsiz]**.
 4. **Eski v1 akışı yarım.** `/analyze` istekleri tüketicisiz kuyrukta birikir (§2.1); `RiskAnalysisCompletedConsumer` hiç gelmeyecek mesajı bekler. Kaldırılacak mı, korunacak mı **[belirsiz]**.
@@ -234,7 +246,7 @@ Bu inceleme sırasında çalıştırıldı (2026-11-23, yerel):
 ### Güvenlik / işletim
 17. `postgres` (5433), `redis` (6379), `mlflow` (5000) host'ta tüm arayüzlere açık; API/RabbitMQ/ml-worker ise loopback'e bağlı. Redis ve MLflow'da kimlik doğrulama yok.
 18. `.env.example` gerçekçi görünen bir JWT anahtarı ve yönetici parolası içeriyor; kopyalanıp değiştirilmeden kullanılma riski var (`<YOUR_...>` placeholder kontrolü yalnızca RabbitMQ parolasını yakalar).
-19. API'de rate limiting yok; JIT endpoint'i istek başına bir outbox kaydı + bir inference üretir.
+19. Rate limiting yalnızca JIT POST/GET ve login/refresh için var. Eski `/analyze`, `evaluations` ve supplier CRUD endpoint'leri limitsiz. Sayaçlar bellekte tutulur ve API yeniden başlayınca sıfırlanır.
 20. `xai_audit_logs.RequestPayload/ResponsePayload` ham iş verisini saklıyor; eski dokümandaki "PII maskeleme" hedefinin uygulanıp uygulanmadığı **[belirsiz]** (JIT payload'larında PII görünmüyor).
 
 ### Dokümantasyon
