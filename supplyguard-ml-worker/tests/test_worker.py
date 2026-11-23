@@ -20,7 +20,7 @@ import rabbitmq
 import services
 from config import Settings
 from schemas import FEATURE_NAMES, RiskAnalysisRequest, RiskAnalysisResponse
-from services import RiskAnalysisService, format_feature, risk_shap_values
+from services import RiskAnalysisService, format_feature, risk_base_value, risk_shap_values
 
 REQUEST = {
     "CorrelationId": "request-123", "SupplierId": "supplier-456",
@@ -36,7 +36,7 @@ def engine(probability=0.996, values=None):
         predict_proba=Mock(return_value=[[1 - probability, probability]]),
     )
     values = [[0.6, -0.5, 0.4, 0.2, -0.1, 0.0]] if values is None else values
-    explainer = SimpleNamespace(shap_values=Mock(return_value=np.asarray(values)))
+    explainer = SimpleNamespace(shap_values=Mock(return_value=np.asarray(values)), expected_value=0.3)
     return RiskAnalysisService(object(), classifier, explainer)
 
 
@@ -94,6 +94,24 @@ class SchemaAndFormattingTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 risk_shap_values(raw, 1)
 
+    def test_shap_base_value_versions(self):
+        self.assertEqual(risk_base_value(0.7, 1), 0.7)
+        self.assertEqual(risk_base_value(np.array([0.7]), 0), -0.7)
+        self.assertEqual(risk_base_value([-0.7, 0.7], 1), 0.7)
+        self.assertEqual(risk_base_value([-0.7, 0.7], 0), -0.7)
+        for expected in ([1.0, 2.0, 3.0], float("nan")):
+            with self.subTest(expected=expected), self.assertRaises(ValueError):
+                risk_base_value(expected, 1)
+
+    def test_contributions_are_optional_and_strict_on_the_wire(self):
+        base = {"CorrelationId": "c", "SupplierId": "s", "ConfidenceScore": 0.5,
+                "ExplanationText": "x", "IsSuccessful": True}
+        self.assertIsNone(RiskAnalysisResponse(**base).Contributions)
+        with self.assertRaises(ValidationError):
+            RiskAnalysisResponse(**base, Contributions=[{"Feature": "f", "Contribution": 1.0, "extra": 1}])
+        with self.assertRaises(ValidationError):
+            RiskAnalysisResponse(**base, Contributions=[{"Feature": "f", "Contribution": float("inf")}])
+
     def test_component_credentials_are_url_encoded_and_explicit_url_wins(self):
         from aio_pika.connection import make_url
         config = Settings(
@@ -120,6 +138,9 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
             "Kalite Hata Oranı (%0.4). Öte yandan, Zamanında Teslimat Oranı (%95.0) "
             "durumu riski düşürme yönünde etki yapmaktadır.")
         self.assertIsNone(response.ErrorMessage)
+        self.assertEqual(response.BaseValue, 0.3)
+        self.assertEqual([(c.Feature, c.Contribution) for c in response.Contributions],
+                         list(zip(FEATURE_NAMES, [0.6, -0.5, 0.4, 0.2, -0.1, 0.0])))
         frame = service.classifier.predict_proba.call_args.args[0]
         self.assertEqual(list(frame.columns), list(FEATURE_NAMES))
         self.assertEqual(frame.shape, (1, 6))
@@ -181,6 +202,9 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         contributions = risk_shap_values(explainer.shap_values(row), 1)
         raw = classifier.predict(row, raw_score=True)[0]
         self.assertAlmostEqual(float(np.asarray(explainer.expected_value).reshape(-1)[-1]) + contributions.sum(), raw, places=5)
+        # The wire response carries the same decomposition (rounded to 6 decimals).
+        wire_total = response.BaseValue + sum(c.Contribution for c in response.Contributions)
+        self.assertAlmostEqual(wire_total, raw, places=4)
 
 
 class WorkerTests(unittest.IsolatedAsyncioTestCase):
@@ -213,6 +237,8 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
                 response = RiskAnalysisResponse.model_validate_json(self.exchange.publish.call_args.args[0].body)
                 self.assertFalse(response.IsSuccessful)
                 self.assertTrue(response.ErrorMessage)
+                self.assertIsNone(response.Contributions)
+                self.assertIsNone(response.BaseValue)
                 self.assertEqual(response.CorrelationId, "c" if b"CorrelationId" in body else "amqp-fallback")
                 self.assertEqual(incoming.actions, [("ack",)])
 

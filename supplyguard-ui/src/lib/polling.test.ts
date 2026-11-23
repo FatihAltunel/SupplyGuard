@@ -5,7 +5,7 @@ import { PollAbortedError, PollTimeoutError, abortableSleep, pollUntilDone } fro
 
 const status = (state: RiskAnalysisState): RiskAnalysisStatus => ({
   supplierId: 's', correlationId: 'c', status: state, confidenceScore: state === 'Completed' ? 0.8 : null,
-  explanationText: null, failureMessage: null, requestedAtUtc: null, completedAtUtc: null, features: null
+  explanationText: null, failureMessage: null, requestedAtUtc: null, completedAtUtc: null, features: null, explanation: null
 })
 
 /** Virtual clock: sleeping advances time instantly. */

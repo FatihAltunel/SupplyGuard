@@ -50,6 +50,83 @@ public sealed class WorkerRiskAnalysisPersistenceTests
     }
 
     [Fact]
+    public async Task ResponseWithShapContributions_IsRetained_AndIdenticalRedeliveryIsDuplicate()
+    {
+        await using var store = await JitRiskAnalysisTests.Store.CreateAsync();
+        var supplier = new Supplier("Worker Supplier", "WORKER-SHAP", "TR");
+        var request = WorkerRiskAnalysisFixtures.Request(supplier.Id);
+        await using (var seed = store.Context())
+        {
+            seed.Suppliers.Add(supplier);
+            seed.XAIAuditLogs.Add(XAIAuditLog.CreatePending(supplier.Id, request.CorrelationId, request.MessageId,
+                new IntegrationMessageSerializer().Serialize(request), request.OccurredAtUtc));
+            await seed.SaveChangesAsync();
+        }
+        var response = WorkerRiskAnalysisFixtures.ResponseWithShap(request);
+
+        Assert.Equal(RiskAnalysisResponseDisposition.Processed, (await HandleAsync(store, response)).Value!.Disposition);
+        // A redelivery arrives as a new object with a new list instance: equality must compare contents.
+        var redelivered = new RiskAnalysisResponseSerializer().Deserialize(new RiskAnalysisResponseSerializer().Serialize(response));
+        Assert.NotSame(response.Contributions, redelivered.Contributions);
+        Assert.Equal(RiskAnalysisResponseDisposition.Duplicate, (await HandleAsync(store, redelivered)).Value!.Disposition);
+        var changed = response with { Contributions = [.. response.Contributions!.Take(5), new("ActiveRiskIndicatorsCount", 9m)] };
+        Assert.Equal("RiskAnalysis.ConflictingResponse", Assert.Single((await HandleAsync(store, changed)).Errors).Code);
+
+        await using var verification = store.Context();
+        var audit = await verification.XAIAuditLogs.SingleAsync();
+        Assert.Equal(response, new RiskAnalysisResponseSerializer().Deserialize(audit.ResponsePayload!));
+    }
+
+    [Fact]
+    public void ResponseContract_AcceptsPythonShapPayload_IncludingExponentNumbersAndExplicitNulls()
+    {
+        var serializer = new RiskAnalysisResponseSerializer();
+        var supplier = Guid.NewGuid().ToString("D");
+        var success = serializer.Deserialize(
+            "{\"CorrelationId\":\"c-1\",\"SupplierId\":\"" + supplier + "\",\"ConfidenceScore\":3.1e-05," +
+            "\"ExplanationText\":\"x\",\"IsSuccessful\":true,\"ErrorMessage\":null,\"BaseValue\":-2.5," +
+            "\"Contributions\":[{\"Feature\":\"qualityDefectRate\",\"Contribution\":1e-06}," +
+            "{\"Feature\":\"averageDeliveryDelayDays\",\"Contribution\":-0.75}]}");
+        Assert.Equal(.000001m, success.Contributions![0].Contribution);
+        Assert.Equal(-2.5m, success.BaseValue);
+
+        var failure = serializer.Deserialize(
+            "{\"CorrelationId\":\"c-2\",\"SupplierId\":\"" + supplier + "\",\"ConfidenceScore\":0.0,\"ExplanationText\":\"\"," +
+            "\"IsSuccessful\":false,\"ErrorMessage\":\"Risk analizi tamamlanamadı.\",\"BaseValue\":null,\"Contributions\":null}");
+        Assert.Null(failure.Contributions);
+    }
+
+    [Theory]
+    [InlineData("on-failure")]
+    [InlineData("base-without-contributions")]
+    [InlineData("contributions-without-base")]
+    [InlineData("duplicate-feature")]
+    [InlineData("null-item")]
+    [InlineData("unknown-item-member")]
+    [InlineData("quoted-contribution")]
+    [InlineData("empty-list")]
+    public void ResponseContract_RejectsInvalidShapDecomposition(string scenario)
+    {
+        var serializer = new RiskAnalysisResponseSerializer();
+        var node = JsonNode.Parse(serializer.Serialize(WorkerRiskAnalysisFixtures.ResponseWithShap(WorkerRiskAnalysisFixtures.Request())))!.AsObject();
+        var items = node["Contributions"]!.AsArray();
+        switch (scenario)
+        {
+            case "on-failure":
+                node["IsSuccessful"] = false; node["ConfidenceScore"] = 0; node["ExplanationText"] = ""; node["ErrorMessage"] = "failed";
+                break;
+            case "base-without-contributions": node["Contributions"] = null; break;
+            case "contributions-without-base": node["BaseValue"] = null; break;
+            case "duplicate-feature": items[1]!["Feature"] = items[0]!["Feature"]!.GetValue<string>(); break;
+            case "null-item": items.Add(null); break;
+            case "unknown-item-member": items[0]!["Extra"] = 1; break;
+            case "quoted-contribution": items[0]!["Contribution"] = "1.5"; break;
+            case "empty-list": node["Contributions"] = new JsonArray(); break;
+        }
+        Assert.Throws<JsonException>(() => serializer.Deserialize(node.ToJsonString()));
+    }
+
+    [Fact]
     public async Task UnknownCorrelationOrWrongSupplier_DoesNotCreateOrAlterAudit()
     {
         await using var store = await JitRiskAnalysisTests.Store.CreateAsync();
@@ -137,4 +214,17 @@ internal static class WorkerRiskAnalysisFixtures
         2.4m, .95m, .004m, 15.2m, 80, 3) { MessageId = Guid.NewGuid(), OccurredAtUtc = Now };
     public static RiskAnalysisResponse Response(RiskAnalysisRequest request) =>
         new(request.CorrelationId, request.SupplierId, .996m, "Risk açıklaması", true, null);
+    public static RiskAnalysisResponse ResponseWithShap(RiskAnalysisRequest request) => Response(request) with
+    {
+        BaseValue = -1.234567m,
+        Contributions =
+        [
+            new("averageDeliveryDelayDays", 1.5m),
+            new("onTimeDeliveryRate", -.25m),
+            new("qualityDefectRate", 2.000001m),
+            new("DeliveryDelayTrend_Percentage", 1.1m),
+            new("FinancialStabilityScore", -.4m),
+            new("ActiveRiskIndicatorsCount", .3m)
+        ]
+    };
 }

@@ -56,11 +56,19 @@ anlamına gelmez. Her yanıt şu alanları içerir:
   "ConfidenceScore": 0.996,
   "ExplanationText": "Tedarikçide >%99 (Yüksek Kesinlik) oranında risk tespit edilmiştir. Riski tetikleyen ana faktörler: Ortalama Teslimat Gecikmesi (2.4 gün), Kalite Hata Oranı (%0.4). Öte yandan, Zamanında Teslimat Oranı (%95.0) durumu riski düşürme yönünde etki yapmaktadır.",
   "IsSuccessful": true,
-  "ErrorMessage": null
+  "ErrorMessage": null,
+  "BaseValue": 1.234567,
+  "Contributions": [
+    {"Feature": "averageDeliveryDelayDays", "Contribution": 2.105432},
+    {"Feature": "onTimeDeliveryRate", "Contribution": -0.512301}
+  ]
 }
 ```
 
 Bu yanıt biçim örneğidir; gerçek olasılık ve faktörler modelden hesaplanır.
+`Contributions` her zaman 6 özelliğin tamamını `FEATURE_NAMES` sırasıyla içerir; örnek kısaltılmıştır.
+`BaseValue` ve `Contributions` yalnızca başarılı yanıtta bulunur, başarısız yanıtta `null` olur.
+`BaseValue + Σ Contribution`, risk sınıfının LightGBM ham skorunu (log-odds) verir. Değerler 6 ondalığa yuvarlanır.
 
 `onTimeDeliveryRate` ve `qualityDefectRate` için 0–1 ölçeği, trend için doğrudan
 yüzde değeri kullanılır: `0.004 -> %0.4`, `15.2 -> +%15.2`. Modelin eğitiminde

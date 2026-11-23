@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { RiskAnalysisStatus } from '../api/types'
-import FeatureBars from './FeatureBars.vue'
+import { summarizeExplanation } from '../lib/explanation'
+import ContributionChart from './ContributionChart.vue'
+import ModelSteps from './ModelSteps.vue'
 import RiskGauge from './RiskGauge.vue'
 
 const props = defineProps<{
@@ -13,6 +15,12 @@ const props = defineProps<{
 
 const completedAt = computed(() =>
   props.result?.completedAtUtc ? new Date(props.result.completedAtUtc).toLocaleString('tr-TR') : null)
+
+// Null when the worker sent no SHAP decomposition (failed or older analyses).
+const summary = computed(() =>
+  props.result?.status === 'Completed' && props.result.explanation
+    ? summarizeExplanation(props.result.explanation, props.result.features)
+    : null)
 </script>
 
 <template>
@@ -48,7 +56,10 @@ const completedAt = computed(() =>
       Analiz tamamlanamadı: {{ result.failureMessage ?? 'Bilinmeyen hata' }}
     </p>
 
-    <FeatureBars v-if="result?.features" :features="result.features" />
+    <template v-if="summary && result?.confidenceScore !== null && result?.confidenceScore !== undefined">
+      <ModelSteps :summary="summary" :score="result.confidenceScore" />
+      <ContributionChart :rows="summary.rows" />
+    </template>
 
     <p v-if="result" class="muted tiny">İstek kimliği: <code>{{ result.correlationId }}</code></p>
   </section>

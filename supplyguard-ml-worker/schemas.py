@@ -23,6 +23,14 @@ class RiskAnalysisRequest(BaseModel):
     ActiveRiskIndicatorsCount: FiniteFloat
 
 
+class FeatureContribution(BaseModel):
+    """One SHAP value for the risk class, in LightGBM raw-score (log-odds) units."""
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    Feature: str = Field(min_length=1)
+    Contribution: float
+
+
 class RiskAnalysisResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
@@ -32,3 +40,6 @@ class RiskAnalysisResponse(BaseModel):
     ExplanationText: str
     IsSuccessful: bool
     ErrorMessage: str | None = None
+    # Success only: BaseValue + sum(Contributions) reconstructs the risk-class log-odds.
+    BaseValue: float | None = None
+    Contributions: list[FeatureContribution] | None = None

@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { FEATURES, SCENARIOS, emptyFormValues, formatRiskPercent, riskPosition, toFormValue, toRequestBody, validateFeatures } from './features'
+import { FEATURES, SCENARIOS, emptyFormValues, formatRiskPercent, toFormValue, toRequestBody, validateFeatures } from './features'
 import { newCorrelationId } from './correlation'
 
 describe('SCENARIOS', () => {
   it('offers only the high and low risk examples', () => {
     expect(SCENARIOS.map((s) => s.id)).toEqual(['high', 'low'])
+  })
+
+  it('explains every parameter in plain language', () => {
+    for (const feature of FEATURES) expect(feature.description.length).toBeGreaterThan(40)
   })
 })
 
@@ -50,12 +54,6 @@ describe('chart helpers', () => {
   it('converts API rates back to percent', () => {
     expect(toFormValue(byKey('onTimeDeliveryRate'), 0.583)).toBe(58.3)
     expect(toFormValue(byKey('averageDeliveryDelayDays'), 2.4)).toBe(2.4)
-  })
-
-  it('orients positions so 1 means riskier', () => {
-    expect(riskPosition(byKey('onTimeDeliveryRate'), 100)).toBe(0)
-    expect(riskPosition(byKey('averageDeliveryDelayDays'), 60)).toBe(1)
-    expect(riskPosition(byKey('averageDeliveryDelayDays'), 999)).toBe(1)
   })
 })
 
