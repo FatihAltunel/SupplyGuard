@@ -9,8 +9,8 @@ defineProps<{ compact?: boolean }>()
   <aside v-if="compact" class="notice notice-compact" role="note">
     <span class="notice-icon" aria-hidden="true">!</span>
     <p>
-      <strong>Geliştirme aşamasında:</strong> {{ MODEL_INFO.name }} ({{ MODEL_INFO.algorithm }}) kalibre edilmemiştir;
-      sonuçlar simüle edilmiş demo verilerine dayanır ve gerçek tedarik kararlarında kullanılmamalıdır.
+      <strong>Geliştirme aşamasında:</strong> {{ MODEL_INFO.name }} ({{ MODEL_INFO.algorithm }}) sentetik verilerle
+      eğitilmiştir; sonuçlar simüle edilmiş demo verilerine dayanır ve gerçek tedarik kararlarında kullanılmamalıdır.
     </p>
   </aside>
 
@@ -31,7 +31,8 @@ defineProps<{ compact?: boolean }>()
       <div><dt>Girdi / Çıktı</dt><dd>{{ MODEL_INFO.features }} parametre · {{ MODEL_INFO.output }}</dd></div>
     </dl>
     <ul class="notice-list">
-      <li>Olasılıklar henüz kalibre edilmemiştir; sonuçlar çoğunlukla %0'a veya %100'e yakın çıkar ve küçük girdi değişiklikleri sonucu sert biçimde değiştirebilir.</li>
+      <li>Model sentetik verilerle eğitilmiştir: veri üreticisine yazılan iş varsayımlarını öğrenir, gerçek tedarikçi performansını ölçmez.</li>
+      <li>Her yeni sürüm yayına alınmadan önce kalibrasyon, monotonluk (ör. gecikme arttıkça risk düşmemeli) ve örnek senaryo testlerinden geçer.</li>
       <li>Teslimat trendi ve finansal skor gibi kaynaklar demo ortamında simüle edilir.</li>
       <li>Sonuçlar bilgilendirme amaçlıdır; gerçek tedarikçi kararlarında kullanılmamalıdır.</li>
     </ul>
