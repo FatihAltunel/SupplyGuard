@@ -20,9 +20,10 @@ const strongestDown = computed(() => props.summary.rows.find((row) => row.direct
         Girdiğiniz 6 değer mesaj kuyruğu üzerinden Python model servisine gönderildi.
       </li>
       <li>
-        <strong>{{ MODEL_INFO.trees }} karar ağacı sırayla değerlendirdi.</strong>
+        <strong>Karar ağaçları sırayla değerlendirdi.</strong>
         {{ MODEL_INFO.algorithm }}, değerlerinizi örnek tedarikçi verilerinden öğrendiği eşiklerle karşılaştırdı
-        (ör. “gecikme trendi belirli bir yüzdenin üzerinde mi?”). Her ağaç tahmine küçük bir artı veya eksi ekledi.
+        (ör. “gecikme trendi belirli bir yüzdenin üzerinde mi?”). Her ağaç tahmine küçük bir artı veya eksi ekledi;
+        ağaç sayısı her eğitimde otomatik belirlenir.
       </li>
       <li>
         <strong>Başlangıç noktası: {{ formatRiskPercent(summary.baseProbability) }}.</strong>
@@ -43,8 +44,8 @@ const strongestDown = computed(() => props.summary.rows.find((row) => row.direct
       </li>
     </ol>
     <p class="muted tiny-note">
-      Birimler modelin iç ölçeğidir (log-odds). Model henüz kalibre edilmediği için yüzde çoğunlukla uçlarda çıkar;
-      asıl bilgi, hangi parametrenin hangi yöne ve ne kadar etki ettiğidir.
+      Birimler modelin iç ölçeğidir (log-odds). Yüzde, başlangıç noktası ile tüm etkilerin toplamının olasılığa
+      çevrilmiş hâlidir; grafik, hangi parametrenin hangi yöne ve ne kadar etki ettiğini gösterir.
     </p>
   </section>
 </template>
