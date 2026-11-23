@@ -28,6 +28,8 @@ using SupplyGuard.Infrastructure.Persistence.Outbox;
 using SupplyGuard.Infrastructure.Persistence.Repositories;
 using SupplyGuard.WebAPI.Authentication.Authorization;
 using SupplyGuard.WebAPI.Controllers;
+using SupplyGuard.WebAPI.RateLimiting;
+using Microsoft.Extensions.Configuration;
 using Xunit;
 
 namespace SupplyGuard.IntegrationTests;
@@ -139,7 +141,162 @@ public sealed class JitRiskAnalysisEndpointTests
         Assert.Equal(4, schema.GetProperty("required").GetArrayLength());
     }
 
-    private static string Body(string correlation, decimal deliveryRate = .95m) => JsonSerializer.Serialize(new
+    [Fact]
+    public async Task Get_ReturnsPendingWithSentFeatures_ThenTerminalResult()
+    {
+        await using var api = await Api.CreateAsync();
+        (await api.PostAsync(Body("poll-1"))).Dispose();
+
+        using (var pending = await api.GetAsync("poll-1"))
+        {
+            Assert.Equal(HttpStatusCode.OK, pending.StatusCode);
+            using var json = JsonDocument.Parse(await pending.Content.ReadAsStringAsync());
+            var root = json.RootElement;
+            Assert.Equal("Pending", root.GetProperty("status").GetString());
+            Assert.Equal(JsonValueKind.Null, root.GetProperty("confidenceScore").ValueKind);
+            Assert.Equal(JsonValueKind.Null, root.GetProperty("explanationText").ValueKind);
+            var features = root.GetProperty("features");
+            Assert.Equal(.95m, features.GetProperty("onTimeDeliveryRate").GetDecimal());
+            Assert.Equal(15m, features.GetProperty("deliveryDelayTrendPercentage").GetDecimal());
+            Assert.Equal(85m, features.GetProperty("financialStabilityScore").GetDecimal());
+            Assert.Equal(0, features.GetProperty("activeRiskIndicatorsCount").GetInt32());
+        }
+
+        await using (var context = api.Store.Context())
+        {
+            var audit = await context.XAIAuditLogs.SingleAsync();
+            audit.Complete(.8731m, "Tedarikçide %87.3 oranında risk tespit edilmiştir.", "{}", DateTimeOffset.UtcNow);
+            await context.SaveChangesAsync();
+        }
+
+        using var completed = await api.GetAsync("poll-1");
+        using var result = JsonDocument.Parse(await completed.Content.ReadAsStringAsync());
+        Assert.Equal("Completed", result.RootElement.GetProperty("status").GetString());
+        Assert.Equal(.8731m, result.RootElement.GetProperty("confidenceScore").GetDecimal());
+        Assert.StartsWith("Tedarikçide", result.RootElement.GetProperty("explanationText").GetString());
+        Assert.NotEqual(JsonValueKind.Null, result.RootElement.GetProperty("completedAtUtc").ValueKind);
+    }
+
+    [Fact]
+    public async Task Get_FailedAnalysis_ExposesFailureMessageWithoutScore()
+    {
+        await using var api = await Api.CreateAsync();
+        (await api.PostAsync(Body("poll-failed"))).Dispose();
+        await using (var context = api.Store.Context())
+        {
+            var audit = await context.XAIAuditLogs.SingleAsync();
+            audit.Fail("Risk analizi tamamlanamadı.", "{}", DateTimeOffset.UtcNow);
+            await context.SaveChangesAsync();
+        }
+
+        using var response = await api.GetAsync("poll-failed");
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("Failed", json.RootElement.GetProperty("status").GetString());
+        Assert.Equal("Risk analizi tamamlanamadı.", json.RootElement.GetProperty("failureMessage").GetString());
+        Assert.Equal(JsonValueKind.Null, json.RootElement.GetProperty("confidenceScore").ValueKind);
+    }
+
+    [Fact]
+    public async Task Get_UnknownCorrelationOrOtherSupplier_ReturnsNotFound()
+    {
+        await using var api = await Api.CreateAsync();
+        (await api.PostAsync(Body("owned-correlation"))).Dispose();
+        using var unknown = await api.GetAsync("does-not-exist");
+        Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
+        using var otherSupplier = await api.GetAsync("owned-correlation", Guid.NewGuid());
+        Assert.Equal(HttpStatusCode.NotFound, otherSupplier.StatusCode);
+    }
+
+    [Fact]
+    public async Task Get_RequiresReadPermission()
+    {
+        await using var api = await Api.CreateAsync();
+        api.Client.DefaultRequestHeaders.Authorization = new("Bearer", Api.Token(Permissions.RiskAssessmentsCreate));
+        using var response = await api.GetAsync("any");
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Overrides_InDemoMode_ReplaceIntegrationFeaturesInWorkerPayload()
+    {
+        await using var api = await Api.CreateAsync();
+        using var response = await api.PostAsync(Body("override-1", overrides: (42.5m, 12m, 7)));
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        await using var context = api.Store.Context();
+        using var payload = JsonDocument.Parse((await context.OutboxMessages.SingleAsync()).Payload);
+        Assert.Equal(8, payload.RootElement.EnumerateObject().Count());
+        Assert.Equal(42.5m, payload.RootElement.GetProperty("DeliveryDelayTrend_Percentage").GetDecimal());
+        Assert.Equal(12m, payload.RootElement.GetProperty("FinancialStabilityScore").GetDecimal());
+        Assert.Equal(7, payload.RootElement.GetProperty("ActiveRiskIndicatorsCount").GetInt32());
+    }
+
+    [Fact]
+    public async Task Overrides_OutsideDemoMode_AreRejectedWithoutCreatingRequests()
+    {
+        await using var api = await Api.CreateAsync(simulated: false);
+        using var response = await api.PostAsync(Body("override-denied", overrides: (10m, 50m, 1)));
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("RiskAnalysis.OverridesNotAllowed", await response.Content.ReadAsStringAsync());
+        await using var context = api.Store.Context();
+        Assert.Empty(await context.XAIAuditLogs.ToListAsync());
+        Assert.Empty(await context.OutboxMessages.ToListAsync());
+    }
+
+    [Theory]
+    [InlineData(-100.01, 50, 0)]
+    [InlineData(10, 100.01, 0)]
+    [InlineData(10, 50, -1)]
+    public async Task Overrides_OutOfRange_AreRejected(double trend, double stability, int count)
+    {
+        await using var api = await Api.CreateAsync();
+        using var response = await api.PostAsync(Body("override-range", overrides: ((decimal)trend, (decimal)stability, count)));
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        await using var context = api.Store.Context();
+        Assert.Empty(await context.OutboxMessages.ToListAsync());
+    }
+
+    [Fact]
+    public async Task RateLimit_RejectsExcessSubmissionsWith429AndRetryAfter_WithoutCreatingRequests()
+    {
+        await using var api = await Api.CreateAsync(rateLimitPerMinute: 2);
+        (await api.PostAsync(Body("limited-1"))).Dispose();
+        (await api.PostAsync(Body("limited-2"))).Dispose();
+        using var rejected = await api.PostAsync(Body("limited-3"));
+
+        Assert.Equal((HttpStatusCode)429, rejected.StatusCode);
+        Assert.True(rejected.Headers.RetryAfter?.Delta > TimeSpan.Zero);
+        Assert.Contains("RateLimit.Exceeded", await rejected.Content.ReadAsStringAsync());
+        await using var context = api.Store.Context();
+        Assert.Equal(2, await context.OutboxMessages.CountAsync());
+    }
+
+    [Fact]
+    public async Task RateLimit_StatusPollingUsesItsOwnBudget()
+    {
+        await using var api = await Api.CreateAsync(rateLimitPerMinute: 1);
+        using var accepted = await api.PostAsync(Body("separate-budget"));
+        Assert.Equal(HttpStatusCode.Accepted, accepted.StatusCode);
+        using var firstPoll = await api.GetAsync("separate-budget");
+        Assert.Equal(HttpStatusCode.OK, firstPoll.StatusCode);
+        using var secondPoll = await api.GetAsync("separate-budget");
+        Assert.Equal((HttpStatusCode)429, secondPoll.StatusCode);
+    }
+
+    private static string Body(string correlation, decimal deliveryRate = .95m,
+        (decimal Trend, decimal Stability, int Count)? overrides = null) => overrides is { } value
+        ? JsonSerializer.Serialize(new
+        {
+            correlationId = correlation,
+            averageDeliveryDelayDays = 2.4m,
+            onTimeDeliveryRate = deliveryRate,
+            qualityDefectRate = .004m,
+            deliveryDelayTrendPercentage = value.Trend,
+            financialStabilityScore = value.Stability,
+            activeRiskIndicatorsCount = value.Count
+        })
+        : Body(correlation, deliveryRate);
+
+    private static string Body(string correlation, decimal deliveryRate) => JsonSerializer.Serialize(new
     {
         correlationId = correlation, averageDeliveryDelayDays = 2.4m, onTimeDeliveryRate = deliveryRate, qualityDefectRate = .004m
     });
@@ -151,7 +308,7 @@ public sealed class JitRiskAnalysisEndpointTests
         public JitRiskAnalysisTests.Store Store => store;
         public Guid SupplierId => supplierId;
 
-        public static async Task<Api> CreateAsync(bool simulated = true)
+        public static async Task<Api> CreateAsync(bool simulated = true, int? rateLimitPerMinute = null)
         {
             var store = await JitRiskAnalysisTests.Store.CreateAsync();
             var supplier = new Supplier("HTTP Supplier", Guid.NewGuid().ToString("N"), "TR");
@@ -192,8 +349,19 @@ public sealed class JitRiskAnalysisEndpointTests
                 };
             });
             builder.Services.AddAuthorization(AuthorizationPolicies.Configure);
+            if (rateLimitPerMinute is { } limit)
+            {
+                builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["RateLimiting:AnalysisRequestsPerMinute"] = limit.ToString(),
+                    ["RateLimiting:StatusReadsPerMinute"] = limit.ToString(),
+                    ["RateLimiting:AuthenticationAttemptsPerMinute"] = limit.ToString()
+                });
+                builder.Services.AddSupplyGuardRateLimiting(builder.Configuration);
+            }
             var application = builder.Build();
             application.UseSwagger();
+            if (rateLimitPerMinute is not null) application.UseRateLimiter();
             application.UseAuthentication();
             application.UseAuthorization();
             application.MapControllers();
@@ -207,10 +375,17 @@ public sealed class JitRiskAnalysisEndpointTests
         public Task<HttpResponseMessage> PostAsync(string body, Guid? supplier = null) =>
             client.PostAsync($"/api/suppliers/{supplier ?? supplierId}/risk-analyses", new StringContent(body, Encoding.UTF8, "application/json"));
 
-        public static string Token(bool withPermission)
+        public Task<HttpResponseMessage> GetAsync(string correlation, Guid? supplier = null) =>
+            client.GetAsync($"/api/suppliers/{supplier ?? supplierId}/risk-analyses/{correlation}");
+
+        public static string Token(bool withPermission) => withPermission
+            ? Token(Permissions.RiskAssessmentsCreate, Permissions.RiskAssessmentsRead)
+            : Token();
+
+        public static string Token(params string[] permissions)
         {
             var claims = new List<Claim> { new(ClaimTypes.NameIdentifier, Guid.NewGuid().ToString("D")) };
-            if (withPermission) claims.Add(new(Permissions.ClaimType, Permissions.RiskAssessmentsCreate));
+            claims.AddRange(permissions.Select(permission => new Claim(Permissions.ClaimType, permission)));
             var token = new JwtSecurityToken("test", "test", claims, expires: DateTime.UtcNow.AddMinutes(5),
                 signingCredentials: new SigningCredentials(new SymmetricSecurityKey(Encoding.UTF8.GetBytes(SigningKey)), SecurityAlgorithms.HmacSha256));
             return new JwtSecurityTokenHandler().WriteToken(token);

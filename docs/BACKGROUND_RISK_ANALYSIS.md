@@ -91,10 +91,10 @@ Durum kodları: hatalı/eksik body `400`, token yok/geçersiz `401`, izin eksik 
 tedarikçi yok `404`, correlation çakışması `409`, hesaplanamayan trend veya geçersiz
 kaynak özellikleri `422`, kullanılamayan performans/finans adaptörü `503`.
 
-Projede gerçek performans/finans adaptörleri henüz yoktur. Yerel test için
-`JitRiskAnalysis:UseSimulatedIntegrations=true` açıkça seçilebilir; bu seçenek
-yalnızca Development ortamında kabul edilir. Compose'un mevcut Development API
-servisinde açıktır. Trend `%15`, finansal istikrar `85` sentetik değerlerdir;
+Projede gerçek performans/finans adaptörleri henüz yoktur. Demo için
+`DemoMode:Enabled=true` açıkça seçilebilir. Bu seçenek ortamdan bağımsızdır, Production'da
+da açılabilir ve Compose'da varsayılan olarak açıktır (`DEMO_MODE`). Eski
+`JitRiskAnalysis:UseSimulatedIntegrations` ayarı kaldırıldı. Trend `%15`, finansal istikrar `85` sentetik değerlerdir;
 aktif gösterge sayısı veritabanından, ML sonucu gerçek Python worker'dan gelir.
 Varsayılan ayar kapalıdır. Üretimde gerçek `ISupplierPerformanceService` ve
 `IFinancialIntegrationService` adaptörlerini kaydedin; yoksa endpoint sahte veri

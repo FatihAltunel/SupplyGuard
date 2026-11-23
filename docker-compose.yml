@@ -109,7 +109,11 @@ services:
       RabbitMq__VirtualHost: "${RABBITMQ_VHOST:-supplyguard}"
       RabbitMq__UseTls: "false"
       Messaging__RunBackgroundServices: "false"
-      JitRiskAnalysis__UseSimulatedIntegrations: "true"
+      # Public demo: simulated supplier data, feature overrides, demo suppliers and "Demo olarak kullan" sign-in.
+      # Works in any ASPNETCORE_ENVIRONMENT (e.g. Production on AWS). Never enable with real supplier data.
+      DemoMode__Enabled: "${DEMO_MODE:-true}"
+      # The web (Nginx) container is the only public entry point; it sets X-Forwarded-For.
+      ReverseProxy__TrustForwardedHeaders: "true"
       Jwt__Issuer: "${JWT_ISSUER:-SupplyGuard.WebAPI}"
       Jwt__Audience: "${JWT_AUDIENCE:-SupplyGuard.Client}"
       Jwt__SigningKey: "${JWT_SIGNING_KEY:?Set JWT_SIGNING_KEY to at least 32 characters in the ignored .env file}"
@@ -118,6 +122,19 @@ services:
       Identity__InitialAdministrator__Password: "${INITIAL_ADMIN_PASSWORD:?Set INITIAL_ADMIN_PASSWORD in the ignored .env file}"
     ports:
       - "127.0.0.1:${API_PORT:-8080}:8080"
+
+  web:
+    build:
+      context: ./supplyguard-ui
+      dockerfile: Dockerfile
+    container_name: supplyguard-web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+    ports:
+      # Public entry point (UI + /api proxy). Override the host port with WEB_PORT.
+      - "${WEB_PORT:-80}:80"
 
   background-worker:
     build:

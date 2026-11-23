@@ -3,6 +3,8 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using SupplyGuard.Application.Common.Interfaces;
+using SupplyGuard.Application.Features.RiskManagement.RequestJitRiskAnalysis;
+using SupplyGuard.Infrastructure.DemoMode;
 using SupplyGuard.Infrastructure.Identity.Jwt;
 using SupplyGuard.Infrastructure.Identity.Seeding;
 using SupplyGuard.Infrastructure.Identity.Services;
@@ -12,16 +14,36 @@ using SupplyGuard.Infrastructure.Persistence;
 using SupplyGuard.Infrastructure.Persistence.Interceptors;
 using SupplyGuard.Infrastructure.Persistence.Outbox;
 using SupplyGuard.Infrastructure.Persistence.Repositories;
+using SupplyGuard.Infrastructure.Persistence.Seeding;
 
 namespace SupplyGuard.Infrastructure;
 
 public static class DependencyInjection
 {
-    /// <summary>Explicit demo opt-in. Never registered automatically for production.</summary>
+    /// <summary>
+    /// Binds <see cref="DemoModeOptions"/>. When DemoMode:Enabled is true (any environment), registers the
+    /// simulated integrations, feature overrides, demo suppliers and the demo account seeder.
+    /// Call only from a host that also registers ASP.NET Core Identity.
+    /// </summary>
+    public static IServiceCollection AddDemoMode(this IServiceCollection services, IConfiguration configuration)
+    {
+        var section = configuration.GetSection(DemoModeOptions.SectionName);
+        services.Configure<DemoModeOptions>(section);
+        if (section.Get<DemoModeOptions>()?.Enabled != true) return services;
+
+        services.AddSimulatedSupplierIntegrations();
+        services.AddScoped<DemoUserSeeder>();
+        return services;
+    }
+
+    /// <summary>Simulated integrations, feature overrides and demo suppliers. Use through <see cref="AddDemoMode"/>.</summary>
     public static IServiceCollection AddSimulatedSupplierIntegrations(this IServiceCollection services)
     {
         services.AddScoped<ISupplierPerformanceService, SimulatedSupplierPerformanceService>();
         services.AddScoped<IFinancialIntegrationService, SimulatedFinancialIntegrationService>();
+        // Demo mode only: callers may enter the integration-derived features themselves.
+        services.Replace(ServiceDescriptor.Singleton(JitFeatureOverridePolicy.DemoOnly));
+        services.AddScoped<DemoSupplierSeeder>();
         return services;
     }
 

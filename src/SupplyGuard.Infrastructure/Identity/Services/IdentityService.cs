@@ -42,6 +42,16 @@ public sealed class IdentityService(
         return await CreateAuthenticatedUserAsync(user);
     }
 
+    public async Task<AuthenticatedUser?> FindUserByNameAsync(
+        string userName,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var user = await userManager.FindByNameAsync(userName);
+        return user is null ? null : await CreateAuthenticatedUserAsync(user);
+    }
+
     public async Task<AuthenticatedUser?> FindUserByIdAsync(
         Guid userId,
         CancellationToken cancellationToken = default)

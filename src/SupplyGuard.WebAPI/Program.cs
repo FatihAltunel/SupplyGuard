@@ -9,8 +9,10 @@ using SupplyGuard.Infrastructure.Identity.Jwt;
 using SupplyGuard.Infrastructure.Identity.Seeding;
 using SupplyGuard.Infrastructure.Messaging.RabbitMq;
 using SupplyGuard.Infrastructure.Persistence;
+using SupplyGuard.Infrastructure.Persistence.Seeding;
 using SupplyGuard.WebAPI.Authentication;
 using SupplyGuard.WebAPI.Authentication.Authorization;
+using SupplyGuard.WebAPI.RateLimiting;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -23,12 +25,14 @@ builder.Services.Configure<InitialAdministratorOptions>(
 builder.Services.AddApplication();
 builder.Services.AddJitRiskAnalysis();
 builder.Services.AddInfrastructure(builder.Configuration);
-if (builder.Configuration.GetValue<bool>("JitRiskAnalysis:UseSimulatedIntegrations"))
+if (builder.Configuration.GetValue<bool?>("JitRiskAnalysis:UseSimulatedIntegrations") is not null)
 {
-    if (!builder.Environment.IsDevelopment())
-        throw new InvalidOperationException("Simulated supplier integrations are only supported in Development.");
-    builder.Services.AddSimulatedSupplierIntegrations();
+    // Fail fast instead of silently ignoring the replaced setting.
+    throw new InvalidOperationException(
+        "JitRiskAnalysis:UseSimulatedIntegrations was replaced by DemoMode:Enabled. Remove the old setting.");
 }
+// Explicit opt-in for a public demo, allowed in any environment; see DemoModeOptions.
+builder.Services.AddDemoMode(builder.Configuration);
 builder.Services.AddRabbitMqMessaging(builder.Configuration,
     builder.Configuration.GetValue("Messaging:RunBackgroundServices", true));
 builder.Services.AddStackExchangeRedisCache(options =>
@@ -94,6 +98,7 @@ builder.Services
     });
 
 builder.Services.AddAuthorization(AuthorizationPolicies.Configure);
+builder.Services.AddSupplyGuardRateLimiting(builder.Configuration);
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
@@ -107,8 +112,11 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
+app.UseSupplyGuardForwardedHeaders();
 app.UseHttpsRedirection();
 
+// Before authentication, so anonymous floods are rejected without token validation work.
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -118,6 +126,17 @@ using (var scope = app.Services.CreateScope())
 {
     var identitySeeder = scope.ServiceProvider.GetRequiredService<IdentitySeeder>();
     await identitySeeder.SeedAsync();
+
+    // Both seeders are registered only when DemoMode:Enabled is true.
+    var demoSuppliers = scope.ServiceProvider.GetService<DemoSupplierSeeder>();
+    var demoUser = scope.ServiceProvider.GetService<DemoUserSeeder>();
+    if (demoSuppliers is not null && demoUser is not null)
+    {
+        await demoSuppliers.SeedAsync();
+        await demoUser.SeedAsync();
+        app.Logger.LogWarning(
+            "DemoMode is enabled: simulated supplier data, feature overrides and anonymous demo sign-in are active.");
+    }
 }
 
 app.Run();
