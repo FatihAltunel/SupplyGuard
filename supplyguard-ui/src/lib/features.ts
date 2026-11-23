@@ -7,6 +7,8 @@ export interface FeatureDefinition {
   label: string
   unit: string
   hint: string
+  /** Plain-language meaning of the parameter, with a worked example, shown under the input. */
+  description: string
   /** Form values for rates are entered as percentages and sent to the API as 0..1. */
   percent: boolean
   integer: boolean
@@ -19,12 +21,36 @@ export interface FeatureDefinition {
 
 // Lower bounds match the API validators. Upper bounds are UI sanity limits for the demo form.
 export const FEATURES: readonly FeatureDefinition[] = [
-  { key: 'averageDeliveryDelayDays', label: 'Ortalama teslimat gecikmesi', unit: 'gün', hint: 'Son dönem ortalaması', percent: false, integer: false, min: 0, max: 60, step: 0.1, riskRises: 'up' },
-  { key: 'onTimeDeliveryRate', label: 'Zamanında teslimat oranı', unit: '%', hint: '0–100 arası', percent: true, integer: false, min: 0, max: 100, step: 0.1, riskRises: 'down' },
-  { key: 'qualityDefectRate', label: 'Kalite hata oranı', unit: '%', hint: '0–100 arası', percent: true, integer: false, min: 0, max: 100, step: 0.01, riskRises: 'up' },
-  { key: 'deliveryDelayTrendPercentage', label: 'Gecikme trendi (30 gün)', unit: '%', hint: 'Negatif değer iyileşme demektir', percent: false, integer: false, min: -100, max: 500, step: 0.1, riskRises: 'up' },
-  { key: 'financialStabilityScore', label: 'Finansal istikrar skoru', unit: 'puan', hint: '0–100 arası', percent: false, integer: false, min: 0, max: 100, step: 1, riskRises: 'down' },
-  { key: 'activeRiskIndicatorsCount', label: 'Aktif risk göstergesi', unit: 'adet', hint: 'Tam sayı', percent: false, integer: true, min: 0, max: 50, step: 1, riskRises: 'up' }
+  {
+    key: 'averageDeliveryDelayDays', label: 'Ortalama teslimat gecikmesi', unit: 'gün', hint: 'Son dönem ortalaması',
+    description: 'Siparişlerin söz verilen teslim tarihinden ortalama kaç gün sonra geldiği. 0 = hep zamanında; 2,5 = ortalama iki buçuk gün geç.',
+    percent: false, integer: false, min: 0, max: 60, step: 0.1, riskRises: 'up'
+  },
+  {
+    key: 'onTimeDeliveryRate', label: 'Zamanında teslimat oranı', unit: '%', hint: '0–100 arası',
+    description: 'Teslimatların yüzde kaçının söz verilen tarihte veya daha önce geldiği. %95 = her 100 teslimatın 95\'i zamanında.',
+    percent: true, integer: false, min: 0, max: 100, step: 0.1, riskRises: 'down'
+  },
+  {
+    key: 'qualityDefectRate', label: 'Kalite hata oranı', unit: '%', hint: '0–100 arası',
+    description: 'Teslim alınan parçaların yüzde kaçının kalite kontrolde hatalı bulunduğu. %0,5 = her 1.000 parçanın 5\'i hatalı.',
+    percent: true, integer: false, min: 0, max: 100, step: 0.01, riskRises: 'up'
+  },
+  {
+    key: 'deliveryDelayTrendPercentage', label: 'Gecikme trendi (30 gün)', unit: '%', hint: 'Negatif değer iyileşme demektir',
+    description: 'Son 30 günün ortalama gecikmesinin önceki 30 güne göre yüzde kaç değiştiği. +%20 = gecikmeler artıyor; −%10 = azalıyor.',
+    percent: false, integer: false, min: -100, max: 500, step: 0.1, riskRises: 'up'
+  },
+  {
+    key: 'financialStabilityScore', label: 'Finansal istikrar skoru', unit: 'puan', hint: '0–100 arası',
+    description: 'Tedarikçinin mali sağlığını özetleyen puan. 100\'e yakın = güçlü finansal yapı; düşük puan = ödeme güçlüğü veya iflas riski.',
+    percent: false, integer: false, min: 0, max: 100, step: 1, riskRises: 'down'
+  },
+  {
+    key: 'activeRiskIndicatorsCount', label: 'Aktif risk göstergesi', unit: 'adet', hint: 'Tam sayı',
+    description: 'Tedarikçi için şu an açık olan risk sinyallerinin sayısı (ör. uyum sorunu, kalite bulgusu, bölgesel risk). 0 = bilinen aktif risk yok.',
+    percent: false, integer: true, min: 0, max: 50, step: 1, riskRises: 'up'
+  }
 ]
 
 /** Values as shown in the form (rates in percent). */

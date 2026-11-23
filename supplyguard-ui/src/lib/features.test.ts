@@ -6,6 +6,10 @@ describe('SCENARIOS', () => {
   it('offers only the high and low risk examples', () => {
     expect(SCENARIOS.map((s) => s.id)).toEqual(['high', 'low'])
   })
+
+  it('explains every parameter in plain language', () => {
+    for (const feature of FEATURES) expect(feature.description.length).toBeGreaterThan(40)
+  })
 })
 
 describe('validateFeatures', () => {
