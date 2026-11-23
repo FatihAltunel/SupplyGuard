@@ -16,7 +16,7 @@
 | `background-worker` | .NET 8 Generic Host (`src/SupplyGuard.BackgroundWorker`) | HTTP yok. `OutboxProcessor` (Outbox → RabbitMQ), `RiskAnalysisResponseConsumer` (yeni akış), `RiskAnalysisCompletedConsumer` (eski v1 akış), `EarlyWarningNotificationConsumer`. | — |
 | `migrations` | Aynı WebAPI Dockerfile, `migrations` target | Tek seferlik EF Core migration; başarılı bitmeden `api`/`background-worker` başlamaz. | — |
 | `ml-worker` | Python 3.13, FastAPI + aio-pika (`supplyguard-ml-worker`) | Başlangıçta MLflow'dan modeli yükler, `supplyguard.risk.requests` kuyruğunu tüketir, LightGBM `predict_proba` + SHAP `TreeExplainer` ile Türkçe açıklama üretir, yanıtı `supplyguard.risk.responses` kuyruğuna yayınlar. `GET /health`. | `127.0.0.1:8000` |
-| `mlflow` | `python:3.10-slim` + çalışma anında `pip install mlflow==3.18.0` | Model Registry ve artifact sunucusu. Backend: SQLite (`./mlruns/mlflow.db`), artifact'ler `./mlruns/artifacts`. Worker `models:/SupplyGuard_JIT_Model/latest` yükler. | `5000` (tüm arayüzler) |
+| `mlflow` | `python:3.10-slim` + çalışma anında `pip install mlflow==3.18.0` | Model Registry ve artifact sunucusu. Backend: SQLite (`./mlruns/mlflow.db`), artifact'ler `./mlruns/artifacts`. Worker `MLFLOW_MODEL_URI` yükler, varsayılan `models:/SupplyGuard_JIT_Model@champion`. Alias'ları `training/promote.py` taşır. | `5000` (tüm arayüzler) |
 | `postgres` | PostgreSQL 16 | Tek kalıcı veri kaynağı: domain (`supplyguard` şeması), Identity (`identity` şeması), Outbox. | `5433` (tüm arayüzler) |
 | `rabbitmq` | RabbitMQ 4.3.6-management | API/.NET worker ile Python worker arasındaki tek iletişim kanalı; ayrıca bildirim olayları. vhost `supplyguard`. | `127.0.0.1:5672`, `127.0.0.1:15672` |
 | `redis` | Redis 7 alpine | Yalnızca dağıtık önbellek (bkz. §4). | `6379` (tüm arayüzler) |
@@ -234,15 +234,20 @@ Bu inceleme sırasında çalıştırıldı (2026-11-23, yerel):
 4. **Eski v1 akışı yarım.** `/analyze` istekleri tüketicisiz kuyrukta birikir (§2.1); `RiskAnalysisCompletedConsumer` hiç gelmeyecek mesajı bekler. Kaldırılacak mı, korunacak mı **[belirsiz]**.
 
 ### Model / MLflow
-5. **Model tekrar üretilemez.** Eğitim kodu repoda yok; `lgbm_jit_v1.0.joblib` ve `mlruns/` `.gitignore`'da. Temiz klonda `register_model.py` çalıştırılamaz → ml-worker başlangıçta model yükleyemez ve `restart: unless-stopped` ile döngüye girer.
-6. **`latest` sürümüne bağlılık.** Worker sürüm sabitlemiyor ve kullanılan sürümü yanıtta bildirmiyor; audit'te `ModelVersion = "unreported"`, `LatencyMs = 0`. Hangi sonucun hangi modelden geldiği izlenemiyor.
-7. ~~**SHAP katkıları kalıcı değil.**~~ Sayısal katkılar ve base value artık yanıtta taşınıyor ve `ResponsePayload` içinde saklanıyor (§3.3). Katkılar log-odds ölçeğinde. Model kalibre olmadığı için yüzde skor uçlarda kalıyor; göreli katkılar daha bilgilendirici.
+5. ~~**Model tekrar üretilemez.**~~ Model artık koddan yeniden üretilir: `supplyguard-ml-worker/training/` altında veri üreticisi, seed ve eğitim scripti var. Model dosyası ve `mlruns/` hâlâ `.gitignore`'da; model MLflow'da yaşar.
+   - **Açık kalan risk:** temiz bir ortamda `@champion` alias'ı yoksa ml-worker açılamaz ve `restart: unless-stopped` ile döngüye girer. Önce `train.py` ve `promote.py` çalıştırılmalıdır (`training/README.md`, "İlk kurulum").
+   - Eğitim verisi sentetiktir; metrikler gerçek dünya performansı değildir.
+6. ~~**`latest` sürümüne bağlılık.**~~ Worker `MLFLOW_MODEL_URI`'yi yükler (varsayılan `@champion`). Alias'ı başlangıçta bir kez somut sürüme çözer ve `GET /health` yanıtında `model_version` olarak raporlar. Alias'ları yalnızca `promote.py` taşır; geri alma `--rollback` ile yapılır.
+   - **Kısmen açık:** sürüm analiz yanıtında taşınmıyor; audit'te `ModelVersion = "unreported"` ve `LatencyMs = 0` kalıyor. Tek bir sonucun hangi sürümden geldiği audit'ten izlenemiyor.
+7. ~~**SHAP katkıları kalıcı değil.**~~ Sayısal katkılar ve base value artık yanıtta taşınıyor ve `ResponsePayload` içinde saklanıyor (§3.3). Katkılar log-odds ölçeğinde. v1 kalibre olmadığı için yüzde skor uçlarda kalıyordu. v2 olasılıkları kalibre: her sürüm terfiden önce ECE ve uç tahmin oranı kapılarından geçer (`supplyguard-ml-worker/training/model_checks.py`).
 8. **`ConfidenceScore` adlandırması yanıltıcı.** Değer P(risk=1) olasılığı, güven ölçüsü değil. Karar eşiği (ör. hangi olasılık "yüksek risk") tanımlı değil **[belirsiz]**.
 9. **MLflow altyapısı kırılgan.** Her açılışta `pip install` (ağ bağımlılığı, yavaş başlangıç), SQLite backend, healthcheck yok; ml-worker yalnızca `service_started` bekliyor. Port 5000 tüm arayüzlere açık, kimlik doğrulama yok.
-10. `scikit-learn==1.6.1` eğitim sürümüne sabitli, Python imajı 3.13, MLflow imajı 3.10: sürüm uyumu yalnızca yerelde doğrulanmış görünüyor.
+10. **Kütüphane sürümleri:** eğitim `ml-worker` imajının içinde çalışır, bu yüzden eğitim ve çıkarım sürümleri birebir aynıdır (scikit-learn 1.6.1, lightgbm 4.7.0, mlflow 3.18.0).
+    - v1 ise scikit-learn 1.7.2 ile eğitilmişti; yüklenirken `InconsistentVersionWarning` verir. Artık yalnızca geri alma hedefi (`@previous_champion`).
+    - MLflow sunucu imajı Python 3.10, worker imajı Python 3.13 kullanır; ikisinde de mlflow 3.18.0.
 
 ### Mesajlaşma / dayanıklılık
-11. **Python tarafında idempotency yok.** Redelivery'de inference tekrar çalışır; .NET tarafı duplicate'i yakalar. Model nondeterministik değilse sorun değil; `latest` değişirse ikinci yanıt "ConflictingResponse" olarak karantinaya düşebilir.
+11. **Python tarafında idempotency yok.** Redelivery'de inference tekrar çalışır; .NET tarafı duplicate'i yakalar. Model deterministik olduğu için aynı sürümde sorun yok. Ancak bir redelivery beklerken `@champion` taşınır ve worker yeniden başlatılırsa, yeni sürümün yanıtı farklı olabilir. Bu durumda yanıt "ConflictingResponse" olarak karantinaya düşer.
 12. **Karantina kuyruklarının tüketicisi/alarmı yok** (`*.error`, `risk-analysis.invalid.queue`). İzleme/yeniden işleme süreci **[belirsiz]**.
 13. **Outbox süresiz retry.** Publish hatasında karantina yok, yalnızca backoff (≤5 dk). Uzun süre Pending kalan audit'ler için timeout/temizlik mekanizması yok.
 14. **Outbox publish sırasında DB transaction + satır kilidi açık** (publish timeout 30 sn). Broker yavaşsa bağlantı havuzu baskısı oluşabilir.
