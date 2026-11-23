@@ -1,25 +1,16 @@
 services:
   mlflow:
-    image: python:3.10-slim
+    # MLflow is installed at image build time (mlflow/Dockerfile), not on every start.
+    build:
+      context: ./mlflow
     container_name: supplyguard-mlflow
+    restart: unless-stopped
     ports:
       # Loopback only: MLflow has no authentication, and whoever can move @champion controls
       # the model the worker unpickles. Reach it from another machine through an SSH tunnel.
       - "127.0.0.1:5000:5000"
     volumes:
       - ./mlruns:/mlruns
-    command:
-      - /bin/sh
-      - -c
-      - >-
-        python -m pip install --no-cache-dir mlflow==3.18.0 &&
-        exec mlflow server
-        --host 0.0.0.0
-        --port 5000
-        --allowed-hosts "mlflow:5000,supplyguard-mlflow:5000,localhost:*,127.0.0.1:*"
-        --backend-store-uri sqlite:////mlruns/mlflow.db
-        --serve-artifacts
-        --artifacts-destination /mlruns/artifacts
 
   postgres:
     image: postgres:16

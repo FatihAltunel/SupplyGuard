@@ -16,7 +16,7 @@
 | `background-worker` | .NET 8 Generic Host (`src/SupplyGuard.BackgroundWorker`) | HTTP yok. `OutboxProcessor` (Outbox → RabbitMQ), `RiskAnalysisResponseConsumer` (yeni akış), `RiskAnalysisCompletedConsumer` (eski v1 akış), `EarlyWarningNotificationConsumer`. | — |
 | `migrations` | Aynı WebAPI Dockerfile, `migrations` target | Tek seferlik EF Core migration; başarılı bitmeden `api`/`background-worker` başlamaz. | — |
 | `ml-worker` | Python 3.13, FastAPI + aio-pika (`supplyguard-ml-worker`) | Başlangıçta MLflow'dan modeli yükler, `supplyguard.risk.requests` kuyruğunu tüketir, LightGBM `predict_proba` + SHAP `TreeExplainer` ile Türkçe açıklama üretir, yanıtı `supplyguard.risk.responses` kuyruğuna yayınlar. `GET /health`. | `127.0.0.1:8000` |
-| `mlflow` | `python:3.10-slim` + çalışma anında `pip install mlflow==3.18.0` | Model Registry ve artifact sunucusu. Backend: SQLite (`./mlruns/mlflow.db`), artifact'ler `./mlruns/artifacts`. Worker `MLFLOW_MODEL_URI` yükler, varsayılan `models:/SupplyGuard_JIT_Model@champion`. Alias'ları `training/promote.py` taşır. | `127.0.0.1:5000` |
+| `mlflow` | `mlflow/Dockerfile` (`python:3.10-slim` + build anında `mlflow==3.18.0`), `restart: unless-stopped` | Model Registry ve artifact sunucusu. Backend: SQLite (`./mlruns/mlflow.db`), artifact'ler `./mlruns/artifacts`. Worker `MLFLOW_MODEL_URI` yükler, varsayılan `models:/SupplyGuard_JIT_Model@champion`. Alias'ları `training/promote.py` taşır. | `127.0.0.1:5000` |
 | `postgres` | PostgreSQL 16 | Tek kalıcı veri kaynağı: domain (`supplyguard` şeması), Identity (`identity` şeması), Outbox. | `127.0.0.1:5433` |
 | `rabbitmq` | RabbitMQ 4.3.6-management | API/.NET worker ile Python worker arasındaki tek iletişim kanalı; ayrıca bildirim olayları. vhost `supplyguard`. | `127.0.0.1:5672`, `127.0.0.1:15672` |
 | `redis` | Redis 7 alpine | Yalnızca dağıtık önbellek (bkz. §4). | `127.0.0.1:6379` |
@@ -241,7 +241,9 @@ Bu inceleme sırasında çalıştırıldı (2026-11-23, yerel):
    - **Kısmen açık:** sürüm analiz yanıtında taşınmıyor; audit'te `ModelVersion = "unreported"` ve `LatencyMs = 0` kalıyor. Tek bir sonucun hangi sürümden geldiği audit'ten izlenemiyor.
 7. ~~**SHAP katkıları kalıcı değil.**~~ Sayısal katkılar ve base value artık yanıtta taşınıyor ve `ResponsePayload` içinde saklanıyor (§3.3). Katkılar log-odds ölçeğinde. v1 kalibre olmadığı için yüzde skor uçlarda kalıyordu. v2 olasılıkları kalibre: her sürüm terfiden önce ECE ve uç tahmin oranı kapılarından geçer (`supplyguard-ml-worker/training/model_checks.py`).
 8. **`ConfidenceScore` adlandırması yanıltıcı.** Değer P(risk=1) olasılığı, güven ölçüsü değil. Karar eşiği (ör. hangi olasılık "yüksek risk") tanımlı değil **[belirsiz]**.
-9. **MLflow altyapısı kırılgan.** Her açılışta `pip install` (ağ bağımlılığı, yavaş başlangıç), SQLite backend, healthcheck yok; ml-worker yalnızca `service_started` bekliyor. Kimlik doğrulama yok; port 5000 bu yüzden yalnızca `127.0.0.1`'e bağlı (madde 17).
+9. **MLflow altyapısı kırılgan.**
+   - ~~Her açılışta `pip install`~~ MLflow artık imaj build edilirken kurulur (`mlflow/Dockerfile`). Böylece açılışta paket indirmesi yok ve ağ bağımlılığı kalktı.
+   - Açık kalanlar: SQLite backend; healthcheck yok, ml-worker yalnızca `service_started` bekliyor; temel imaj Python 3.10 ve bu sürümün desteği Ekim 2026'da bitti. Kimlik doğrulama yok; port 5000 bu yüzden yalnızca `127.0.0.1`'e bağlı (madde 17).
 10. **Kütüphane sürümleri:** eğitim `ml-worker` imajının içinde çalışır, bu yüzden eğitim ve çıkarım sürümleri birebir aynıdır (scikit-learn 1.6.1, lightgbm 4.7.0, mlflow 3.18.0).
     - v1 ise scikit-learn 1.7.2 ile eğitilmişti; yüklenirken `InconsistentVersionWarning` verir. Artık yalnızca geri alma hedefi (`@previous_champion`).
     - MLflow sunucu imajı Python 3.10, worker imajı Python 3.13 kullanır; ikisinde de mlflow 3.18.0.
