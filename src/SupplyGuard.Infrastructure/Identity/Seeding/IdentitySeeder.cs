@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Options;
 using SupplyGuard.Application.Security;
 using SupplyGuard.Infrastructure.Identity.Entities;
+using SupplyGuard.Infrastructure.Security;
 
 namespace SupplyGuard.Infrastructure.Identity.Seeding;
 
@@ -68,11 +69,12 @@ public sealed class IdentitySeeder(
         if (string.IsNullOrWhiteSpace(options.UserName) ||
             string.IsNullOrWhiteSpace(options.Email) ||
             string.IsNullOrWhiteSpace(options.Password) ||
-            options.Password.Contains("<YOUR_", StringComparison.OrdinalIgnoreCase))
+            PublicSecrets.IsUnsafe(options.Password))
         {
             throw new InvalidOperationException(
-                "Identity:InitialAdministrator configuration must provide UserName, Email, and a non-placeholder " +
-                "Password through User Secrets or environment variables.");
+                "Identity:InitialAdministrator configuration must provide UserName, Email, and a new Password " +
+                "(not a placeholder and not a password published in the repository) through User Secrets or " +
+                "environment variables.");
         }
     }
 
