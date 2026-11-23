@@ -10,6 +10,7 @@ using SupplyGuard.Infrastructure.Identity.Seeding;
 using SupplyGuard.Infrastructure.Messaging.RabbitMq;
 using SupplyGuard.Infrastructure.Persistence;
 using SupplyGuard.Infrastructure.Persistence.Seeding;
+using SupplyGuard.Infrastructure.Security;
 using SupplyGuard.WebAPI.Authentication;
 using SupplyGuard.WebAPI.Authentication.Authorization;
 using SupplyGuard.WebAPI.RateLimiting;
@@ -40,7 +41,7 @@ builder.Services.AddStackExchangeRedisCache(options =>
     options.Configuration = builder.Configuration.GetConnectionString("Redis")
         ?? throw new InvalidOperationException("Redis connection configuration was not found.");
 
-    if (IsPublicPlaceholder(options.Configuration))
+    if (PublicSecrets.IsUnsafe(options.Configuration))
     {
         throw new InvalidOperationException(
             "Redis connection configuration contains a public placeholder. " +
@@ -70,12 +71,14 @@ var signingKey = jwtOptions.SigningKey
 
 if (string.IsNullOrWhiteSpace(jwtOptions.Issuer) ||
     string.IsNullOrWhiteSpace(jwtOptions.Audience) ||
-    IsPublicPlaceholder(signingKey) ||
+    PublicSecrets.IsUnsafe(signingKey) ||
     Encoding.UTF8.GetByteCount(signingKey) < 32)
 {
+    // A placeholder, a key published in this repository, or a short key would let anyone forge tokens.
     throw new InvalidOperationException(
-        "JWT configuration is invalid. Set Jwt:SigningKey to a non-placeholder value of at least 32 UTF-8 " +
-        "bytes with User Secrets or the Jwt__SigningKey environment variable.");
+        "JWT configuration is invalid. Set Jwt:SigningKey to a new random value of at least 32 UTF-8 bytes " +
+        "(not a placeholder and not a key published in the repository) with User Secrets or the " +
+        "Jwt__SigningKey environment variable.");
 }
 
 builder.Services
@@ -140,6 +143,3 @@ using (var scope = app.Services.CreateScope())
 }
 
 app.Run();
-
-static bool IsPublicPlaceholder(string value) =>
-    value.Contains("<YOUR_", StringComparison.OrdinalIgnoreCase);
