@@ -6,6 +6,8 @@ export const MODEL_INFO = {
   registry: 'MLflow Model Registry',
   version: 'latest (sürüm numarası henüz raporlanmıyor)',
   algorithm: 'LightGBM ikili sınıflandırıcı',
+  // Read from the registered model (booster.num_trees()); update when the model is retrained.
+  trees: 100,
   explainer: 'SHAP TreeExplainer',
   features: 6,
   output: 'Risk sınıfının olasılığı (%0–100)'

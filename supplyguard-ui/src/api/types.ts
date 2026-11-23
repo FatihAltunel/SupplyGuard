@@ -68,4 +68,17 @@ export interface RiskAnalysisStatus {
   requestedAtUtc: string | null
   completedAtUtc: string | null
   features: RiskAnalysisFeatures | null
+  /** SHAP decomposition (log-odds); null for failed analyses and older worker responses. */
+  explanation: RiskAnalysisExplanation | null
+}
+
+export interface RiskAnalysisContribution {
+  /** Same keys as RiskAnalysisFeatures. */
+  feature: string
+  contribution: number
+}
+
+export interface RiskAnalysisExplanation {
+  baseValue: number
+  contributions: RiskAnalysisContribution[]
 }

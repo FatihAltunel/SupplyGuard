@@ -15,8 +15,6 @@ export interface FeatureDefinition {
   min: number
   max: number
   step: number
-  /** Which end of the range raises risk; used only to colour the input chart. */
-  riskRises: 'up' | 'down'
 }
 
 // Lower bounds match the API validators. Upper bounds are UI sanity limits for the demo form.
@@ -24,32 +22,32 @@ export const FEATURES: readonly FeatureDefinition[] = [
   {
     key: 'averageDeliveryDelayDays', label: 'Ortalama teslimat gecikmesi', unit: 'gün', hint: 'Son dönem ortalaması',
     description: 'Siparişlerin söz verilen teslim tarihinden ortalama kaç gün sonra geldiği. 0 = hep zamanında; 2,5 = ortalama iki buçuk gün geç.',
-    percent: false, integer: false, min: 0, max: 60, step: 0.1, riskRises: 'up'
+    percent: false, integer: false, min: 0, max: 60, step: 0.1
   },
   {
     key: 'onTimeDeliveryRate', label: 'Zamanında teslimat oranı', unit: '%', hint: '0–100 arası',
     description: 'Teslimatların yüzde kaçının söz verilen tarihte veya daha önce geldiği. %95 = her 100 teslimatın 95\'i zamanında.',
-    percent: true, integer: false, min: 0, max: 100, step: 0.1, riskRises: 'down'
+    percent: true, integer: false, min: 0, max: 100, step: 0.1
   },
   {
     key: 'qualityDefectRate', label: 'Kalite hata oranı', unit: '%', hint: '0–100 arası',
     description: 'Teslim alınan parçaların yüzde kaçının kalite kontrolde hatalı bulunduğu. %0,5 = her 1.000 parçanın 5\'i hatalı.',
-    percent: true, integer: false, min: 0, max: 100, step: 0.01, riskRises: 'up'
+    percent: true, integer: false, min: 0, max: 100, step: 0.01
   },
   {
     key: 'deliveryDelayTrendPercentage', label: 'Gecikme trendi (30 gün)', unit: '%', hint: 'Negatif değer iyileşme demektir',
     description: 'Son 30 günün ortalama gecikmesinin önceki 30 güne göre yüzde kaç değiştiği. +%20 = gecikmeler artıyor; −%10 = azalıyor.',
-    percent: false, integer: false, min: -100, max: 500, step: 0.1, riskRises: 'up'
+    percent: false, integer: false, min: -100, max: 500, step: 0.1
   },
   {
     key: 'financialStabilityScore', label: 'Finansal istikrar skoru', unit: 'puan', hint: '0–100 arası',
     description: 'Tedarikçinin mali sağlığını özetleyen puan. 100\'e yakın = güçlü finansal yapı; düşük puan = ödeme güçlüğü veya iflas riski.',
-    percent: false, integer: false, min: 0, max: 100, step: 1, riskRises: 'down'
+    percent: false, integer: false, min: 0, max: 100, step: 1
   },
   {
     key: 'activeRiskIndicatorsCount', label: 'Aktif risk göstergesi', unit: 'adet', hint: 'Tam sayı',
     description: 'Tedarikçi için şu an açık olan risk sinyallerinin sayısı (ör. uyum sorunu, kalite bulgusu, bölgesel risk). 0 = bilinen aktif risk yok.',
-    percent: false, integer: true, min: 0, max: 50, step: 1, riskRises: 'up'
+    percent: false, integer: true, min: 0, max: 50, step: 1
   }
 ]
 
@@ -100,13 +98,6 @@ export function toFormValue(feature: FeatureDefinition, apiValue: number): numbe
 export function formatRiskPercent(probability: number): string {
   if (probability > 0.999) return '>%99,9'
   return `%${(probability * 100).toLocaleString('tr-TR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}`
-}
-
-/** 0..1 position of a value in its range, oriented so 1 always means "riskier". */
-export function riskPosition(feature: FeatureDefinition, formValue: number): number {
-  const clamped = Math.min(feature.max, Math.max(feature.min, formValue))
-  const position = (clamped - feature.min) / (feature.max - feature.min)
-  return feature.riskRises === 'up' ? position : 1 - position
 }
 
 export interface Scenario {
