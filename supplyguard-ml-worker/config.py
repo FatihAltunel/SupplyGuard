@@ -8,6 +8,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     mlflow_tracking_uri: str = "http://localhost:5000"
+    # Geçici test için ör. models:/SupplyGuard_JIT_Model@challenger veya models:/SupplyGuard_JIT_Model/3
+    mlflow_model_uri: str = Field(default="models:/SupplyGuard_JIT_Model@champion", min_length=1)
     rabbitmq_url: SecretStr = SecretStr("amqp://guest:guest@localhost/")
     # Preserve the existing Docker Compose environment. An explicit URL wins.
     rabbitmq_host: str = "localhost"

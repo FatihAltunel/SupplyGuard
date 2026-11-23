@@ -17,7 +17,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = Settings()
-    service = await asyncio.to_thread(RiskAnalysisService.load, settings.mlflow_tracking_uri)
+    service = await asyncio.to_thread(
+        RiskAnalysisService.load, settings.mlflow_tracking_uri, settings.mlflow_model_uri)
     worker = RabbitMQWorker(settings, service)
     app.state.model = service.model
     app.state.classifier = service.classifier
@@ -43,11 +44,14 @@ async def health(request: Request) -> JSONResponse:
     rabbitmq_ready = worker is not None and worker.is_ready
     inference_ready = worker is not None and worker.inference_ready
     healthy = rabbitmq_ready and inference_ready
+    service = getattr(request.app.state, "service", None)
     return JSONResponse(
         status_code=200 if healthy else 503,
         content={
             "status": "healthy" if healthy else "unhealthy",
             "rabbitmq": "ready" if rabbitmq_ready else "unavailable",
             "inference": "ready" if inference_ready else "unavailable",
+            # Hangi sürümün canlıda olduğunu restart sonrası doğrulamak için.
+            "model_version": getattr(service, "model_version", None),
         },
     )

@@ -173,17 +173,30 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_public_mlflow_raw_model_and_startup_validation(self):
         service = engine()
         model = SimpleNamespace(get_raw_model=Mock(return_value=service.classifier))
+        client = Mock()
+        client.get_model_version_by_alias.return_value = SimpleNamespace(version="7")
         with patch.object(services.mlflow.pyfunc, "load_model", return_value=model) as load, \
+             patch.object(services, "MlflowClient", return_value=client), \
              patch.object(services.shap, "TreeExplainer", return_value=service.explainer), \
              patch.object(services.mlflow, "set_tracking_uri") as tracking, \
              patch.object(services.mlflow, "set_registry_uri"):
             result = RiskAnalysisService.load("http://mlflow:5000")
         self.assertIs(result.model, model)
-        load.assert_called_once_with("models:/SupplyGuard_JIT_Model/latest")
+        # Alias bir kez çözülür, somut sürüm yüklenir ve raporlanır.
+        client.get_model_version_by_alias.assert_called_once_with("SupplyGuard_JIT_Model", "champion")
+        load.assert_called_once_with("models:/SupplyGuard_JIT_Model/7")
+        self.assertEqual(result.model_version, "7")
         tracking.assert_called_once_with("http://mlflow:5000")
         service.classifier.feature_name_ = list(reversed(FEATURE_NAMES))
         with self.assertRaises(ValueError):
             RiskAnalysisService(model, service.classifier, service.explainer)
+
+    def test_resolve_model_uri_accepts_alias_and_fixed_version(self):
+        client = Mock()
+        client.get_model_version_by_alias.return_value = SimpleNamespace(version=3)
+        with patch.object(services, "MlflowClient", return_value=client):
+            self.assertEqual(services.resolve_model_uri("models:/M@challenger"), ("models:/M/3", "3"))
+        self.assertEqual(services.resolve_model_uri("models:/M/5"), ("models:/M/5", "5"))
 
     async def test_real_lightgbm_and_shap_match_raw_score(self):
         import pandas as pd

@@ -1,5 +1,6 @@
 """MLflow loading, risk prediction, and Turkish SHAP explanations."""
 import asyncio
+import logging
 from typing import Any
 
 import mlflow
@@ -7,10 +8,13 @@ import mlflow.pyfunc
 import numpy as np
 import pandas as pd
 import shap
+from mlflow import MlflowClient
 
 from schemas import FEATURE_NAMES, FeatureContribution, RiskAnalysisRequest, RiskAnalysisResponse
 
-MODEL_URI = "models:/SupplyGuard_JIT_Model/latest"
+# Alias, terfi kararını koddan ayırır: promote.py '@champion'u taşır, worker restart'ta yükler.
+DEFAULT_MODEL_URI = "models:/SupplyGuard_JIT_Model@champion"
+logger = logging.getLogger("uvicorn.error")
 FEATURE_LABELS = {
     "averageDeliveryDelayDays": "Ortalama Teslimat Gecikmesi",
     "onTimeDeliveryRate": "Zamanında Teslimat Oranı",
@@ -35,6 +39,19 @@ def format_feature(name: str, value: float) -> str:
     else:
         formatted = f"{value:.1f}"
     return f"{FEATURE_LABELS[name]} ({formatted})"
+
+
+def resolve_model_uri(model_uri: str) -> tuple[str, str]:
+    """'models:/Ad@alias' -> ('models:/Ad/<sürüm>', '<sürüm>').
+
+    Alias bir kez çözülür ve somut sürüm yüklenir. Böylece alias tam yükleme sırasında
+    taşınsa bile worker'ın raporladığı sürüm ile bellekteki model aynı kalır.
+    """
+    if model_uri.startswith("models:/") and "@" in model_uri:
+        name, alias = model_uri.removeprefix("models:/").split("@", 1)
+        version = str(MlflowClient().get_model_version_by_alias(name, alias).version)
+        return f"models:/{name}/{version}", version
+    return model_uri, model_uri.rstrip("/").rsplit("/", 1)[-1]
 
 
 def risk_shap_values(raw: Any, risk_index: int) -> np.ndarray:
@@ -72,8 +89,11 @@ def risk_base_value(expected: Any, risk_index: int) -> float:
 
 
 class RiskAnalysisService:
-    def __init__(self, model: Any, classifier: Any, explainer: Any) -> None:
+    def __init__(self, model: Any, classifier: Any, explainer: Any,
+                 model_uri: str = "unknown", model_version: str = "unknown") -> None:
         self.model = model
+        self.model_uri = model_uri
+        self.model_version = model_version
         self.classifier = classifier
         self.explainer = explainer
         self.is_ready = True
@@ -86,10 +106,11 @@ class RiskAnalysisService:
             raise ValueError("Model feature names/order do not match the request schema.")
 
     @classmethod
-    def load(cls, tracking_uri: str) -> "RiskAnalysisService":
+    def load(cls, tracking_uri: str, model_uri: str = DEFAULT_MODEL_URI) -> "RiskAnalysisService":
         mlflow.set_tracking_uri(tracking_uri)
         mlflow.set_registry_uri(tracking_uri)
-        model = mlflow.pyfunc.load_model(MODEL_URI)
+        resolved_uri, version = resolve_model_uri(model_uri)
+        model = mlflow.pyfunc.load_model(resolved_uri)
         # Public MLflow 3.18 API; uses the same loaded artifact/version.
         classifier = model.get_raw_model()
         if not callable(getattr(classifier, "predict_proba", None)):
@@ -97,7 +118,8 @@ class RiskAnalysisService:
         explainer = shap.TreeExplainer(
             classifier, model_output="raw", feature_perturbation="tree_path_dependent"
         )
-        return cls(model, classifier, explainer)
+        logger.info("Model yüklendi: %s (istenen %s)", resolved_uri, model_uri)
+        return cls(model, classifier, explainer, model_uri=resolved_uri, model_version=version)
 
     async def analyze(self, request: RiskAnalysisRequest) -> RiskAnalysisResponse:
         async with self._lock:

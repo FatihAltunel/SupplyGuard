@@ -11,7 +11,7 @@ SupplyGuard bir tedarikçi risk tahmin sistemidir. .NET 8 Web API kullanıcıdan
 | `migrations` | EF Core migration bundle'ı. Tek seferlik çalışır; başarılı bitmeden api ve worker başlamaz. |
 | `web` (`supplyguard-ui`) | Vue 3 + Vite build'i, Nginx ile statik sunulur. Tek public giriş noktasıdır (`${WEB_PORT:-80}`); `/api/` isteklerini `api:8080`'e proxy'ler. |
 | `ml-worker` (`supplyguard-ml-worker`) | FastAPI + aio-pika. Modeli yükler, `supplyguard.risk.requests` kuyruğunu tüketir, `supplyguard.risk.responses` kuyruğuna yanıt yazar. `GET /health` (:8000). |
-| `mlflow` | Model Registry; backend SQLite (`./mlruns`). Model: `models:/SupplyGuard_JIT_Model/latest`. |
+| `mlflow` | Model Registry; backend SQLite (`./mlruns`). Worker `MLFLOW_MODEL_URI` yükler, varsayılan `models:/SupplyGuard_JIT_Model@champion`. Alias'ları yalnızca `training/promote.py` taşır. |
 | `postgres` / `rabbitmq` / `redis` | Kalıcı veri / mesajlaşma (vhost `supplyguard`) / cache. |
 
 **Uçtan uca akış (güncel JIT):**
@@ -89,8 +89,18 @@ dotnet format SupplyGuard.sln --verify-no-changes
 dotnet ef migrations add <PascalCaseAd> --project src/SupplyGuard.Infrastructure --startup-project src/SupplyGuard.WebAPI   # DOĞRULANMADI (çalıştırılmadı)
 dotnet ef database update --project src/SupplyGuard.Infrastructure --startup-project src/SupplyGuard.WebAPI                # docs'ta yazılı; DOĞRULANMADI
 
-# Modeli MLflow'a kaydetme (gitignore'daki lgbm_jit_v1.0.joblib gerekir; DOĞRULANMADI)
-.\.venv\Scripts\python.exe supplyguard-ml-worker/register_model.py
+# Model eğitimi ve terfi (ayrıntı: supplyguard-ml-worker/training/README.md). Doğrulandı.
+# Her zaman ml-worker imajında çalıştır: kütüphane sürümleri worker ile birebir aynı olur.
+# Yerel .venv kullanma: MLflow import edilemiyor ve sürüm uyuşmazlığı riski var (v1: sklearn 1.7.2 ile eğitilmiş, worker 1.6.1).
+# Ön koşul: mlflow ve ml-worker imajı hazır (docker compose up -d mlflow; docker compose build ml-worker).
+docker compose run --rm --no-deps -v "${PWD}/supplyguard-ml-worker:/work:ro" -w /work ml-worker python training/train.py --tracking-uri http://mlflow:5000
+docker compose run --rm --no-deps -v "${PWD}/supplyguard-ml-worker:/work:ro" -w /work ml-worker python training/promote.py --tracking-uri http://mlflow:5000 --dry-run
+docker compose run --rm --no-deps -v "${PWD}/supplyguard-ml-worker:/work:ro" -w /work ml-worker python training/promote.py --tracking-uri http://mlflow:5000
+docker compose restart ml-worker
+curl.exe http://localhost:8000/health   # "model_version" yeni sürümü göstermeli
+# Diğer promote.py seçenekleri: --status, --rollback, --bootstrap <sürüm>.
+# register_model.py yalnızca eski v1 dosyasını içe aktarır; tracking adresi koda sabit (localhost:5000),
+# container içinde çalışmaz. Yeni ortamda gerekmez: train.py + promote.py modeli doğrudan @champion yapar.
 ```
 
 ## 5. Servisler arası sözleşmeler — iki taraf birlikte güncellenmeli
