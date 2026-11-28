@@ -1,253 +1,196 @@
 # SupplyGuard
 
-SupplyGuard is a supplier risk assessment and early-warning platform in active development. It brings supplier records, operational risk indicators, and explainable machine learning into one decision-support workflow.
+**Live demo: [http://ec2-51-20-202-69.eu-north-1.compute.amazonaws.com](http://ec2-51-20-202-69.eu-north-1.compute.amazonaws.com)**
 
-The goal is to help procurement and operations teams identify delivery risk, understand the factors behind a prediction, and trace how a supplier assessment was produced. A LightGBM model estimates risk from six supplier metrics. SHAP identifies the contributing features, and a rule-based text generator produces a Turkish explanation.
+SupplyGuard is an explainable supplier risk analysis platform for Just-in-Time (JIT) manufacturing. It combines delivery, quality and financial signals into a single risk probability and explains every result with SHAP, so procurement and supply-chain teams can see not only *which* supplier is at risk but also *why*.
 
-The project combines a .NET backend built with Clean Architecture and CQRS with an independently deployed Python ML worker. A React interface is planned for supplier management, risk monitoring, and reviewing explanations.
+The project pairs a .NET 8 backend built with Clean Architecture and CQRS with an independently deployed Python ML worker. They communicate asynchronously through a transactional Outbox and RabbitMQ. A Vue 3 interface served by Nginx lets anyone try the full flow in demo mode.
 
-## Current implementation
+> **Demo notice.** The deployed instance runs in demo mode: supplier data sources are simulated and the model is trained on synthetic data. Results are illustrative and must not be used for real supplier decisions.
 
-| Component | Technology | Current scope |
-| --- | --- | --- |
-| Backend API | .NET 8, ASP.NET Core | Supplier management, rule-based risk evaluation, early-warning queries and acknowledgement, asynchronous analysis request handling |
-| Application design | Clean Architecture, CQRS, built-in dependency injection | Explicit command/query handlers, validation and caching decorators, domain rules |
-| Persistence | PostgreSQL, Entity Framework Core | Supplier and risk records, transactional Outbox, append-only XAI audit records |
-| Authentication | ASP.NET Core Identity, JWT | Login, refresh/logout flows, role and permission-based authorization |
-| Messaging | RabbitMQ, RabbitMQ.Client, aio-pika | .NET Outbox publishing and consumers, Python request/response queues, publisher confirms |
-| Caching | Redis | Supplier-detail caching and invalidation, with fallback to the data source on cache failure |
-| ML worker | Python 3.13, FastAPI, Pydantic, pandas | Validated message processing, background consumption, readiness endpoint |
-| Prediction and explanation | LightGBM, SHAP | Binary risk probability, feature contributions, Turkish explanations |
-| Model registry | MLflow | Registered model loading at worker startup |
-| Local deployment | Docker, Docker Compose | API, migrations, worker, MLflow, PostgreSQL, Redis, and RabbitMQ |
-| Frontend | React | Planned |
+## Try the demo
 
-**Integration status.** The Python worker has been manually verified through RabbitMQ with high-risk and low-risk inputs, including processing an input queued while the worker was stopped. The .NET backend still uses its existing v1 analysis contracts and routing. Connecting the new LightGBM request/response contract to the API and XAI persistence is the next integration milestone.
+1. Open the [live demo](http://ec2-51-20-202-69.eu-north-1.compute.amazonaws.com) and click **Demo olarak kullan** (no registration needed).
+2. Pick a demo supplier and choose the high-risk or low-risk scenario, or select **Kendi verilerinizi girin** to enter your own six values. Each field explains what it means.
+3. Start the analysis. The request is queued, scored by the model and returned within a few seconds, with:
+   - a risk gauge showing the model's risk probability,
+   - a Turkish SHAP explanation of the main factors,
+   - **Model arka planda ne yaptı?** (what the model did in the background), a plain-language walk-through with the real numbers,
+   - **Neden bu sonuç?** (why this result), a chart of how much each input pushed the risk up or down.
 
-## Architecture and message flow
+The demo account can only read suppliers and request or read analyses. Requests are rate-limited per client IP.
 
-Solid connections show implemented component relationships. Dashed connections show the planned React interface and the contract/routing adapters needed for the LightGBM workflow.
+## Highlights
+
+| Area | Implementation |
+| --- | --- |
+| Backend API | .NET 8, ASP.NET Core, Clean Architecture, CQRS with hand-registered handlers and validation/caching decorators (no MediatR) |
+| Persistence | PostgreSQL, EF Core migrations, transactional Outbox, append-only XAI audit log with a unique correlation index |
+| Messaging | RabbitMQ with publisher confirms, durable queues, quarantine queues and idempotent consumers (at-least-once delivery) |
+| ML worker | Python 3.13, FastAPI, aio-pika, Pydantic strict contracts; inference runs off the event loop |
+| Model | Monotone-constrained LightGBM, calibrated probabilities, SHAP `TreeExplainer` decomposition in log-odds |
+| Model lifecycle | MLflow Model Registry with `@champion` / `@challenger` / `@previous_champion` aliases, quality gates and one-command rollback |
+| Frontend | Vue 3 + TypeScript + Vite, hand-drawn SVG charts, no UI framework; static files served by Nginx |
+| Security | JWT + permission policies, per-IP rate limiting (`429` + `Retry-After`), startup guard that rejects placeholder or previously published secrets |
+| Caching | Redis cache-aside for supplier details, fail-open on cache errors |
+| Deployment | Docker Compose; Nginx is the only public entry point, infrastructure ports are bound to loopback |
+
+## Architecture
 
 ```mermaid
-flowchart TB
-    UI["React UI<br/>Planned"] -.-> API["ASP.NET Core API<br/>JWT and permission checks"]
-    API --> APP["Application<br/>Commands, queries, validation"]
-    APP --> DOMAIN["Domain<br/>Supplier and risk business rules"]
-    APP --> INFRA["Infrastructure<br/>EF Core, repositories, integrations"]
-    INFRA --> DB[("PostgreSQL<br/>Suppliers, assessments, XAI audit")]
-    APP --> CACHE[("Redis<br/>Supplier-detail cache")]
-
-    APP --> OUTBOX["Transactional Outbox<br/>Stored in PostgreSQL"]
-    OUTBOX --> PUB["Background Outbox dispatcher"]
-    PUB --> EVENTS["RabbitMQ<br/>Existing .NET event topology"]
-    EVENTS --> CONSUMERS[".NET consumers<br/>Existing notification and v1 completion flows"]
-    CONSUMERS --> APP
-
-    EVENTS -. "Align JIT payload and routing" .-> REQUESTS["RabbitMQ<br/>supplyguard.risk.requests"]
-    REQUESTS --> WORKER["Python ML Worker<br/>Validation and inference"]
-    REGISTRY["MLflow Registry<br/>SupplyGuard_JIT_Model"] -- "Load at startup" --> WORKER
-    WORKER --> PREDICT["LightGBM<br/>Risk probability"]
-    PREDICT --> EXPLAIN["SHAP and text generation<br/>Turkish explanation"]
-    EXPLAIN --> RESPONSES["RabbitMQ<br/>supplyguard.risk.responses"]
-    RESPONSES -. "Implement JIT completion adapter" .-> APP
+flowchart LR
+    USER["Browser"] --> WEB["Nginx + Vue UI<br/>port 80"]
+    WEB -- "/api" --> API["ASP.NET Core API<br/>JWT, rate limiting"]
+    API --> DB[("PostgreSQL<br/>suppliers, XAI audit, Outbox")]
+    API --> CACHE[("Redis<br/>supplier cache")]
+    BG[".NET BackgroundWorker<br/>Outbox dispatcher + consumers"] --> DB
+    BG -- "supplyguard.risk.requests" --> MQ["RabbitMQ"]
+    MQ --> WORKER["Python ML worker<br/>LightGBM + SHAP"]
+    REG["MLflow Registry<br/>@champion"] -- "load at startup" --> WORKER
+    WORKER -- "supplyguard.risk.responses" --> MQ
+    MQ --> BG
+    WEB -. "poll status" .-> API
 ```
 
-The backend organizes business behavior into four projects.
+**End-to-end flow of one analysis**
+
+1. The UI posts six inputs to `POST /api/suppliers/{id}/risk-analyses`. In one transaction, the API stores a pending XAI audit record and an Outbox message, then returns `202 Accepted`.
+2. The background worker claims the Outbox row (`FOR UPDATE SKIP LOCKED`) and publishes it to RabbitMQ with publisher confirms.
+3. The ML worker computes the risk probability with the `@champion` model, decomposes it with SHAP and writes a Turkish explanation. It acknowledges the request only after its response is confirmed by the broker.
+4. The response consumer locks the audit row, records the result exactly once and acknowledges the message after commit. Malformed or conflicting responses go to a quarantine queue.
+5. The UI polls `GET /api/suppliers/{id}/risk-analyses/{correlationId}` about every 1.5 seconds until the analysis is `Completed` or `Failed`. The response carries the score, the explanation text and the SHAP breakdown.
 
 | Project | Responsibility |
 | --- | --- |
-| `SupplyGuard.Domain` | Supplier aggregates, risk indicators, assessments, warning lifecycle, and business invariants |
-| `SupplyGuard.Application` | Use cases, CQRS handlers, validation, service interfaces, caching decorators, and integration contracts |
-| `SupplyGuard.Infrastructure` | EF Core mappings and migrations, PostgreSQL access, Identity, RabbitMQ, Outbox processing, and external-service adapters |
-| `SupplyGuard.WebAPI` | HTTP endpoints, authentication/authorization, Swagger, and application composition |
+| `SupplyGuard.Domain` | Supplier aggregate, risk indicators, assessments, early-warning lifecycle, XAI audit invariants |
+| `SupplyGuard.Application` | Use cases, CQRS handlers, validators, caching decorators, message contracts |
+| `SupplyGuard.Infrastructure` | EF Core, Identity/JWT, RabbitMQ, Outbox, demo mode, secret guard |
+| `SupplyGuard.WebAPI` | HTTP endpoints, authorization policies, rate limiting, composition root |
+| `SupplyGuard.BackgroundWorker` | Outbox publishing and message consumers (no HTTP) |
 
-Application depends on Domain. Infrastructure implements the interfaces defined by Application. WebAPI composes these components. The Python worker is a separate process with its own runtime and deployment image.
+## Risk model
 
-The design addresses several distributed-system concerns.
+The model scores six supplier metrics:
 
-- **Durable publication.** The .NET application stages outgoing events in PostgreSQL through the transactional Outbox. Background dispatch marks a message as processed after broker confirmation.
-- **Delivery settlement.** The Python worker acknowledges an input after its response publication is confirmed. Durable queues and persistent messages support processing across worker restarts. Delivery is at least once, so the new completion adapter must handle duplicate results.
-- **Traceability.** The existing .NET XAI audit model stores request/response payloads, model identity, confidence, latency, and execution outcome. Its unique correlation index supports idempotency in the existing completion flow. The new worker response still needs mapping into this persistence model.
-- **Model lifetime.** The worker loads the model and SHAP explainer once at startup. Synchronous inference runs in a background thread. The current worker processes one analysis at a time per process.
-
-## LightGBM analysis
-
-The worker loads `models:/SupplyGuard_JIT_Model/latest` from MLflow and validates the model's feature names and order before consuming messages.
-
-| Input feature | Meaning | Input convention |
+| Feature | Meaning | Convention |
 | --- | --- | --- |
-| `averageDeliveryDelayDays` | Average delivery delay | Days |
-| `onTimeDeliveryRate` | Share of deliveries made on time | Ratio, such as `0.95` for 95% |
-| `qualityDefectRate` | Share of defective deliveries/items | Ratio, such as `0.004` for 0.4% |
-| `DeliveryDelayTrend_Percentage` | Change in delivery delay | Percentage change, such as `-10.0` for improvement |
-| `FinancialStabilityScore` | Financial stability measure | Project convention of 0–100 |
-| `ActiveRiskIndicatorsCount` | Number of active supplier risk signals | Count |
+| `averageDeliveryDelayDays` | Average delay against the promised delivery date | Days |
+| `onTimeDeliveryRate` | Share of deliveries on or before the promised date | Ratio (`0.95` = 95%; the UI accepts percent) |
+| `qualityDefectRate` | Share of received parts that fail quality control | Ratio (`0.005` = 0.5%) |
+| `DeliveryDelayTrend_Percentage` | Change of the last 30 days' delay against the previous 30 days | Percentage points; negative means improving |
+| `FinancialStabilityScore` | Financial health of the supplier | 0–100 |
+| `ActiveRiskIndicatorsCount` | Currently open risk signals | Count |
 
-The Python schema checks that feature values are finite numbers. Domain-specific bounds and agreement with upstream data sources remain part of the integration work.
+The current champion (v2) is a LightGBM classifier with monotone constraints. For example, a longer delay can never lower the risk. It is trained with early stopping and without class weighting, so its probabilities stay calibrated. Every version must pass quality gates before promotion:
 
-For each request, the worker calculates the probability of risk class `1`, selects up to two positive SHAP contributions and one negative contribution, and inserts their actual values into a Turkish explanation. Inputs with no positive or negative contributors receive an explicit explanation of that condition.
+- calibration error (ECE) and Brier score;
+- the share of extreme predictions;
+- monotonicity checks;
+- business-defined golden cases (e.g. an ideal supplier stays below 10%, a logistics crisis above 60%).
 
-`ConfidenceScore` is the model's risk probability on a 0–1 scale. The backend's rule-based assessments use a weighted 0–100 score. The completion adapter will define how the ML outcome maps into the application’s assessment and warning policies. SHAP contributions explain the model's raw score; the text generator uses their direction and ranking.
+On its holdout set v2 reached AUC 0.851 and ECE 0.010, with no extreme predictions.
 
-A message can be sent to the default RabbitMQ exchange using routing key `supplyguard.risk.requests`.
+> The training data is **synthetic**: a generator encodes business assumptions as a latent risk function and samples labels from it. The model learns those assumptions; its metrics are not real-world performance.
 
-```json
-{
-  "CorrelationId": "demo-analysis-001",
-  "SupplierId": "supplier-demo-001",
-  "averageDeliveryDelayDays": 2.4,
-  "onTimeDeliveryRate": 0.95,
-  "qualityDefectRate": 0.004,
-  "DeliveryDelayTrend_Percentage": 15.2,
-  "FinancialStabilityScore": 80.0,
-  "ActiveRiskIndicatorsCount": 3.0
-}
-```
-
-Responses are published to `supplyguard.risk.responses` with the correlation and supplier identifiers, `ConfidenceScore`, `ExplanationText`, `IsSuccessful`, and nullable `ErrorMessage`. The explanation includes feature values such as `Ortalama Teslimat Gecikmesi (2.4 gün)`.
-
-The .NET JIT request currently nests its metrics under `Features` with different field casing. The existing `POST /api/suppliers/{id}/analyze` endpoint uses the earlier v1 envelope. Payload mapping, exchange bindings, response consumption, and audit metadata must be aligned to complete the API-to-model workflow.
+Training, promotion and rollback are documented in [`supplyguard-ml-worker/training/README.md`](supplyguard-ml-worker/training/README.md). The worker loads `models:/SupplyGuard_JIT_Model@champion`, resolves the alias to a concrete version at startup and reports it in `GET /health`.
 
 ## Repository layout
 
 ```text
 SupplyGuard/
-|-- src/
-|   |-- SupplyGuard.Domain/
-|   |-- SupplyGuard.Application/
-|   |-- SupplyGuard.Infrastructure/
-|   `-- SupplyGuard.WebAPI/
+|-- src/                        # .NET solution (Domain, Application, Infrastructure, WebAPI, BackgroundWorker)
+|-- tests/                      # xUnit: domain, application and integration tests
 |-- supplyguard-ml-worker/
-|   |-- main.py             # FastAPI lifecycle and readiness
-|   |-- config.py           # Environment settings
-|   |-- schemas.py          # ML request/response validation
-|   |-- services.py         # MLflow, LightGBM, SHAP, and text generation
-|   |-- rabbitmq.py         # Queue consumption and response publishing
-|   |-- requirements.txt
+|   |-- main.py, rabbitmq.py    # FastAPI lifecycle, queue consumption
+|   |-- services.py, schemas.py # model loading, prediction, SHAP, wire contracts
+|   |-- training/               # data generator, training, quality gates, promotion
 |   `-- tests/
-|-- tests/
-|   |-- SupplyGuard.Domain.Tests/
-|   |-- SupplyGuard.Application.Tests/
-|   `-- SupplyGuard.IntegrationTests/
-|-- docs/
+|-- supplyguard-ui/             # Vue 3 + TypeScript UI, Nginx config, multi-stage Dockerfile
+|-- mlflow/                     # MLflow server image (installed at build time)
+|-- docs/                       # architecture and integration notes
 |-- docker-compose.yml
 `-- SupplyGuard.sln
 ```
 
-The worker folder also retains the earlier mock inference and v1 contract modules as development history. The current `main.py` uses `RiskAnalysisService` from `services.py`.
-
 ## Run locally
 
-Use Docker Desktop with Docker Compose. Local .NET development requires the .NET 8 SDK. Running Python tooling outside Docker requires Python 3.13 and the worker dependencies.
+Requirements: Docker Desktop with Docker Compose. The .NET 8 SDK is only needed to run the .NET tests outside Docker.
 
-**Configure a fresh checkout.** Copy the environment example and set your local database password, RabbitMQ password, JWT signing key, and initial administrator credentials.
+**1. Configure secrets.** Copy the example file and replace every `<YOUR_...>` value with a new random secret.
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-Use a JWT signing key of at least 32 UTF-8 bytes. The initial administrator password must meet the configured Identity policy, including at least 12 characters and uppercase, lowercase, numeric, and special characters. Local values belong in the ignored `.env` file.
-
-**Prepare the model.** The worker expects a trained `LGBMClassifier` registered as `SupplyGuard_JIT_Model` using MLflow's LightGBM flavor. Trained model artifacts and the local MLflow database are provisioned separately from application source.
-
-If the model is already registered in the Compose MLflow instance, continue to startup below. For a fresh local registry, start the supporting services first.
+Generate each value separately (works in Windows PowerShell 5.1 and PowerShell 7):
 
 ```powershell
-docker compose up -d mlflow postgres redis rabbitmq
+$b = New-Object byte[] 48; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Convert]::ToBase64String($b).TrimEnd('=').Replace('+','-').Replace('/','_')
 ```
 
-Wait for MLflow to become available at `http://localhost:5000`. Register the supplied classifier with its six matching feature names before starting the worker.
+The initial administrator password needs at least 12 characters with upper and lower case, a digit and a symbol. The API refuses to start with placeholders or with any secret that was ever committed to this public repository.
 
-<details>
-<summary>Register a locally supplied model in a fresh MLflow instance</summary>
-
-Place the supplied artifact at `supplyguard-ml-worker/lgbm_jit_v1.0.joblib`, create a Python environment, and install the worker dependencies.
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r supplyguard-ml-worker/requirements.txt
-```
-
-Run this registration step once for the supplied artifact. Each subsequent registration creates another model version.
-
-```powershell
-@'
-import joblib
-import mlflow
-import mlflow.lightgbm
-
-mlflow.set_tracking_uri("http://localhost:5000")
-mlflow.set_registry_uri("http://localhost:5000")
-mlflow.set_experiment("SupplyGuard_JIT_Analysis")
-model = joblib.load("supplyguard-ml-worker/lgbm_jit_v1.0.joblib")
-
-with mlflow.start_run():
-    mlflow.lightgbm.log_model(
-        lgb_model=model,
-        name="model",
-        registered_model_name="SupplyGuard_JIT_Model",
-    )
-'@ | .\.venv\Scripts\python.exe -
-```
-
-</details>
-
-**Start the stack.** Run all commands from the repository root.
+**2. Start the stack.**
 
 ```powershell
 docker compose up -d --build
 docker compose ps -a
 ```
 
-The migration container applies the database migrations and exits with code `0`. The API starts after migrations succeed. MLflow installs its dependencies during container startup, so its initial startup can take longer than the other services.
+The `migrations` container applies database migrations and exits with code `0`; the API starts afterwards. Compose runs in demo mode by default (`DEMO_MODE=true`), which seeds three demo suppliers and the demo account.
 
-| Service | Local address |
+**3. Provide a model (first run only).** On a fresh MLflow registry, train and promote a model inside the worker image, so library versions match inference exactly:
+
+```powershell
+docker compose run --rm --no-deps -v "${PWD}/supplyguard-ml-worker:/work:ro" -w /work ml-worker python training/train.py --tracking-uri http://mlflow:5000
+docker compose run --rm --no-deps -v "${PWD}/supplyguard-ml-worker:/work:ro" -w /work ml-worker python training/promote.py --tracking-uri http://mlflow:5000
+docker compose restart ml-worker
+```
+
+| Service | Address |
 | --- | --- |
+| Web UI (public entry point) | http://localhost |
 | API and Swagger | http://localhost:8080/swagger |
-| Worker readiness | http://localhost:8000/health |
+| Worker readiness and model version | http://localhost:8000/health |
 | MLflow UI and Registry | http://localhost:5000 |
 | RabbitMQ management | http://localhost:15672 |
-| PostgreSQL | `localhost:5433` |
-| Redis | `localhost:6379` |
+| PostgreSQL / Redis | `localhost:5433` / `localhost:6379` |
 
-The API host port can be overridden with `API_PORT`. For a new database, log in through `POST /api/auth/login` using the configured initial administrator username and password.
+Only the web UI is published on all interfaces; every other port is bound to `127.0.0.1`. The UI port can be changed with `WEB_PORT`.
 
-Inside Docker, the worker connects to `http://mlflow:5000` and the `rabbitmq` service. Compose includes the MLflow allowed-host configuration for these service names.
-
-Check readiness and inspect startup failures with the following commands.
+## Tests
 
 ```powershell
-curl.exe -i http://localhost:8000/health
-docker compose logs --tail 100 ml-worker mlflow
-```
-
-Worker readiness returns HTTP `200` after model loading and consumer initialization. RabbitMQ unavailability after startup is reported as HTTP `503`. Model-loading failures prevent the worker from completing startup.
-
-## Validation and next milestones
-
-.NET tests cover domain rules, application use cases, serialization, Outbox behavior, and persistence. Python tests cover validation, inference, SHAP output handling, explanations, and message settlement.
-
-```powershell
+# .NET: domain, application and integration tests
 dotnet test SupplyGuard.sln
+
+# Python worker: contracts, inference, SHAP, messaging and model-quality gates
+cd supplyguard-ml-worker; ..\.venv\Scripts\python.exe -m unittest discover -s tests -v
+
+# UI: Vitest, type check and production build (no local Node.js required)
+docker run --rm -v "${PWD}/supplyguard-ui:/app" -w /app node:22-alpine sh -c "npm ci && npm test && npm run build"
 ```
 
-With a local Python environment containing the worker dependencies, run the worker tests from the repository root.
+Live integration tests against a real PostgreSQL and RabbitMQ are opt-in; see [`docs/BACKGROUND_RISK_ANALYSIS.md`](docs/BACKGROUND_RISK_ANALYSIS.md).
 
-```powershell
-.\.venv\Scripts\python.exe -m unittest discover -s supplyguard-ml-worker/tests -v
-```
+## Deployment
 
-The manual worker acceptance checks completed so far are a high-risk prediction, a low-risk prediction, and successful processing of a request queued while the worker was stopped. Model accuracy, probability calibration, and the complete API-to-LightGBM persistence flow require further evaluation.
+The live demo runs on AWS EC2 (`eu-north-1`) with Docker Compose. Nginx on port 80 is the only public entry point and proxies `/api` to the API on the internal Compose network. Demo mode is enabled there: supplier data sources are simulated and anonymous users sign in through the shared demo account.
 
-| Milestone | Planned outcome |
-| --- | --- |
-| Complete .NET–ML integration | Align JIT message schemas and routing, consume model responses, preserve idempotency, and populate risk assessments and XAI audit records |
-| Build the React interface | Authentication, supplier views, risk summaries, early-warning workflows, and explanation/history screens |
-| Connect operational data | Replace simulated performance and financial adapters with real data sources and consistent observation windows |
-| Extend the LightGBM lifecycle | Evaluate model quality and calibration, make the deployed model version explicit, and support controlled model updates |
-| Strengthen operations | Add durable duplicate handling for the new completion flow, safe Outbox coordination for multiple instances, and operational monitoring |
+## Known limitations and next steps
 
-Further implementation notes are available in the [ML Worker guide](supplyguard-ml-worker/README.md), [JIT request integration notes](docs/JIT_RISK_ANALYSIS.md), and [RabbitMQ/Outbox guide](docs/SPRINT7_MESSAGING.md). The [original domain design](docs/ARCHITECTURE.md) and [Phase A walkthrough](docs/SPRINT8_PHASE_A_E2E.md) document earlier milestones and their contracts.
+- **Data:** the model is trained on synthetic data and the delivery-trend and financial sources are simulated; real ERP and financial integrations are not connected yet.
+- **Transport:** the demo is served over HTTP; TLS (port 443) is planned.
+- **Infrastructure:** MLflow and Redis have no authentication and rely on loopback-only ports. The MLflow image uses Python 3.10, which reached end of life in October 2026. MLflow also has no healthcheck.
+- **Traceability:** the worker reports its model version in `/health`, but the XAI audit record does not store it yet.
+- **Legacy:** the earlier v1 analysis endpoint (`POST /api/suppliers/{id}/analyze`) is still registered, but no worker consumes its queue.
+
+## Documentation
+
+- [Architecture analysis](docs/ARCHITECTURE.md): services, contracts, risks and their status
+- [ML worker guide](supplyguard-ml-worker/README.md) and [model training and promotion](supplyguard-ml-worker/training/README.md)
+- [Background risk analysis integration](docs/BACKGROUND_RISK_ANALYSIS.md) and [JIT request notes](docs/JIT_RISK_ANALYSIS.md)
+- [RabbitMQ and Outbox](docs/SPRINT7_MESSAGING.md)
 
 ## License
 
